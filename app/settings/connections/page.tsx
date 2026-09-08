@@ -4,7 +4,6 @@ import { useState, useEffect, useTransition } from "react";
 import Link from "next/link";
 import {
   Database,
-  ShieldCheck,
   Lock,
   Server,
   ArrowLeft,
@@ -19,12 +18,13 @@ import {
   Sparkles,
   ChevronDown,
   ChevronUp,
-  ShieldAlert,
+  Trash2,
 } from "lucide-react";
 import {
   createDbConnection,
   testDbConnection,
   syncDatabaseSchema,
+  deleteDbConnection,
   getOrgContextAndConnections,
 } from "@/app/actions/db-connections";
 
@@ -44,8 +44,17 @@ const DEFAULT_PORTS: Record<string, number> = {
   mssql: 1433,
   postgres: 5432,
   mysql: 3306,
-  snowflake: 443,
+  mongodb: 27017,
+  firebase: 443,
 };
+
+const DATABASE_ENGINES = [
+  { id: "mssql", label: "SQL Server", desc: "Port 1433" },
+  { id: "mysql", label: "MySQL", desc: "Port 3306" },
+  { id: "postgres", label: "Postgres / Supabase", desc: "Port 5432 / SSL" },
+  { id: "mongodb", label: "MongoDB", desc: "Port 27017 / SRV" },
+  { id: "firebase", label: "Firebase Firestore", desc: "Cloud Firestore" },
+];
 
 export default function DatabaseConnectionsPage() {
   const [isPending, startTransition] = useTransition();
@@ -76,6 +85,7 @@ export default function DatabaseConnectionsPage() {
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, string>>({});
   const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [expandedSchemaId, setExpandedSchemaId] = useState<string | null>(null);
 
   // Real connections list
@@ -101,8 +111,24 @@ export default function DatabaseConnectionsPage() {
   const handleDbTypeChange = (type: string) => {
     setDbType(type);
     setPort(DEFAULT_PORTS[type] || 1433);
-    if (type === "mssql") setSchemaContext("dbo");
-    else if (type === "postgres" || type === "snowflake") setSchemaContext("public");
+    if (type === "mssql") {
+      setSchemaContext("dbo");
+      if (!username) setUsername("sa");
+    } else if (type === "postgres") {
+      setSchemaContext("public");
+      if (!username) setUsername("postgres");
+      if (!dbName) setDbName("postgres");
+    } else if (type === "mysql") {
+      setSchemaContext("");
+      if (!username) setUsername("root");
+    } else if (type === "mongodb") {
+      setSchemaContext("");
+      if (!dbName) setDbName("production");
+    } else if (type === "firebase") {
+      setSchemaContext("");
+      if (!dbName) setDbName("firestore");
+      if (!username) setUsername("firebase-adminsdk");
+    }
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -210,6 +236,29 @@ export default function DatabaseConnectionsPage() {
     setSyncingId(null);
   };
 
+  const handleDeleteConnection = async (connId: string, connName: string) => {
+    if (!window.confirm(`Are you sure you want to disconnect and delete "${connName}"?`)) {
+      return;
+    }
+
+    setDeletingId(connId);
+    const res = await deleteDbConnection(connId, orgId);
+
+    if (res.success) {
+      setConnections((prev) => prev.filter((c) => c.id !== connId));
+      setStatusMessage({
+        type: "success",
+        text: `Disconnected and removed "${connName}".`,
+      });
+    } else {
+      setStatusMessage({
+        type: "error",
+        text: res.error || "Failed to delete connection.",
+      });
+    }
+    setDeletingId(null);
+  };
+
   if (loadingInitial) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -248,7 +297,7 @@ export default function DatabaseConnectionsPage() {
               </span>
             </div>
             <p className="text-xs text-slate-400 mt-0.5">
-              Secure AES-256 encrypted credential store &amp; dynamic RAG schema extraction
+              Secure AES-256 encrypted credential store &amp; dynamic multi-database schema discovery
             </p>
           </div>
         </div>
@@ -260,33 +309,7 @@ export default function DatabaseConnectionsPage() {
         </div>
       </div>
 
-      {/* Security Info Banner */}
-      <div className="p-4 rounded-2xl bg-indigo-950/30 border border-indigo-500/20 backdrop-blur-md flex items-start gap-3.5">
-        <ShieldCheck className="w-5 h-5 text-indigo-400 shrink-0 mt-0.5" />
-        <div className="text-xs space-y-1">
-          <p className="font-semibold text-indigo-200">
-            Tenant-Isolated Zero-Knowledge Credential Storage
-          </p>
-          <p className="text-slate-400 leading-relaxed">
-            Database passwords are encrypted via Node.js crypto using AES-256-CBC with a secure encryption key before storage. Credentials are decrypted strictly in-memory when backend drivers execute read-only queries.
-          </p>
-        </div>
-      </div>
-
-      {/* Role Notice for Members */}
-      {!isOwner && (
-        <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 flex items-start gap-3">
-          <ShieldAlert className="w-5 h-5 shrink-0 mt-0.5 text-amber-400" />
-          <div>
-            <p className="font-bold">Read-Only Member Permissions</p>
-            <p className="text-amber-200/80 mt-0.5">
-              Only organization Owners have permission to configure or modify database connections. As a Member, you have permission to view active data sources and execute natural language queries.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* Main Grid: Form Column + Configured Connections Column */}
+      {/* Main Content Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Form Column (Owners Only) */}
         {isOwner && (
@@ -318,56 +341,70 @@ export default function DatabaseConnectionsPage() {
                 {/* Connection Name */}
                 <div>
                   <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                    Connection Identifier Name
+                    Connection Display Name
                   </label>
                   <input
                     type="text"
                     required
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="e.g. Production Analytics MSSQL"
+                    placeholder="e.g. Production Analytics or Supabase Live"
                     className="w-full text-xs bg-slate-950/80 border border-white/10 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
                   />
                 </div>
 
                 {/* Database Engine Type */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
-                  {[
-                    { id: "mssql", label: "SQL Server", desc: "Port 1433" },
-                    { id: "postgres", label: "PostgreSQL", desc: "Port 5432" },
-                    { id: "mysql", label: "MySQL", desc: "Port 3306" },
-                    { id: "snowflake", label: "Snowflake", desc: "Port 443" },
-                  ].map((engine) => (
-                    <button
-                      key={engine.id}
-                      type="button"
-                      onClick={() => handleDbTypeChange(engine.id)}
-                      className={`p-2.5 rounded-xl border text-left transition-all ${
-                        dbType === engine.id
-                          ? "bg-indigo-600/20 border-indigo-500 text-white shadow-lg shadow-indigo-600/10"
-                          : "bg-white/[0.02] border-white/5 text-slate-400 hover:border-white/10 hover:text-slate-200"
-                      }`}
-                    >
-                      <div className="text-xs font-semibold">{engine.label}</div>
-                      <div className="text-[10px] font-mono text-slate-500 mt-0.5">
-                        {engine.desc}
-                      </div>
-                    </button>
-                  ))}
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    Database Engine
+                  </label>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {DATABASE_ENGINES.map((engine) => (
+                      <button
+                        key={engine.id}
+                        type="button"
+                        onClick={() => handleDbTypeChange(engine.id)}
+                        className={`p-2.5 rounded-xl border text-left transition-all ${
+                          dbType === engine.id
+                            ? "bg-indigo-600/20 border-indigo-500 text-white shadow-lg shadow-indigo-600/10"
+                            : "bg-white/[0.02] border-white/5 text-slate-400 hover:border-white/10 hover:text-slate-200"
+                        }`}
+                      >
+                        <div className="text-xs font-semibold">{engine.label}</div>
+                        <div className="text-[10px] font-mono text-slate-500 mt-0.5">
+                          {engine.desc}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 {/* Host & Port */}
                 <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                   <div className="sm:col-span-3">
                     <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                      Host Address / Server IP
+                      {dbType === "firebase"
+                        ? "Firebase Project ID"
+                        : dbType === "mongodb"
+                        ? "Host / MongoDB URI"
+                        : dbType === "postgres"
+                        ? "Host / Supabase Pooler (e.g. db.xyz.supabase.co)"
+                        : "Host Address / Server IP"}
                     </label>
                     <input
                       type="text"
                       required
                       value={host}
                       onChange={(e) => setHost(e.target.value)}
-                      placeholder="e.g. localhost or sql-cluster.internal"
+                      placeholder={
+                        dbType === "firebase"
+                          ? "e.g. databridge-prod-app"
+                          : dbType === "mongodb"
+                          ? "cluster0.abc.mongodb.net or localhost"
+                          : dbType === "postgres"
+                          ? "aws-0-us-east-1.pooler.supabase.com"
+                          : "103.79.17.77 or localhost"
+                      }
                       className="w-full text-xs bg-slate-950/80 border border-white/10 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
                     />
                   </div>
@@ -385,30 +422,42 @@ export default function DatabaseConnectionsPage() {
                   </div>
                 </div>
 
-                {/* Database Name & Schema Context */}
+                {/* Database Name & Schema */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                      Database Name
+                      {dbType === "firebase" ? "Database / Scope" : "Database Name"}
                     </label>
                     <input
                       type="text"
                       required
                       value={dbName}
                       onChange={(e) => setDbName(e.target.value)}
-                      placeholder="e.g. databridge_ai"
+                      placeholder={
+                        dbType === "firebase"
+                          ? "firestore"
+                          : dbType === "postgres"
+                          ? "postgres"
+                          : "e.g. databridge_enterprise"
+                      }
                       className="w-full text-xs bg-slate-950/80 border border-white/10 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
                     />
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                      Schema Context
+                      Schema / Prefix (Optional)
                     </label>
                     <input
                       type="text"
                       value={schemaContext}
                       onChange={(e) => setSchemaContext(e.target.value)}
-                      placeholder="e.g. dbo or public"
+                      placeholder={
+                        dbType === "postgres"
+                          ? "public"
+                          : dbType === "mssql"
+                          ? "dbo"
+                          : "optional"
+                      }
                       className="w-full text-xs bg-slate-950/80 border border-white/10 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
                     />
                   </div>
@@ -418,20 +467,27 @@ export default function DatabaseConnectionsPage() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                      Database Username
+                      {dbType === "firebase" ? "Client Email / Account ID" : "Database Username"}
                     </label>
                     <input
                       type="text"
-                      required
                       value={username}
                       onChange={(e) => setUsername(e.target.value)}
-                      placeholder="e.g. sa"
+                      placeholder={
+                        dbType === "firebase"
+                          ? "firebase-adminsdk@..."
+                          : dbType === "postgres"
+                          ? "postgres.projectref or postgres"
+                          : "e.g. sa / root"
+                      }
                       className="w-full text-xs bg-slate-950/80 border border-white/10 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
                     />
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                      Password (AES-256 Encrypted)
+                      {dbType === "firebase"
+                        ? "Private Key / Service Account JSON"
+                        : "Password (AES-256 Encrypted)"}
                     </label>
                     <div className="relative">
                       <input
@@ -460,17 +516,17 @@ export default function DatabaseConnectionsPage() {
                 <button
                   type="submit"
                   disabled={isPending}
-                  className="w-full mt-3 py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white text-xs font-semibold shadow-lg shadow-indigo-600/30 transition-all flex items-center justify-center gap-2"
+                  className="w-full mt-3 py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white text-xs font-semibold shadow-lg shadow-indigo-600/30 transition-all flex items-center justify-center gap-2 cursor-pointer"
                 >
                   {isPending ? (
                     <span className="flex items-center gap-2">
                       <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>Encrypting &amp; Saving via Server Action...</span>
+                      <span>Encrypting &amp; Syncing Schema...</span>
                     </span>
                   ) : (
                     <span className="flex items-center gap-1.5">
                       <Lock className="w-3.5 h-3.5" />
-                      <span>Encrypt &amp; Save Connection</span>
+                      <span>Secure &amp; Register Connection</span>
                     </span>
                   )}
                 </button>
@@ -485,10 +541,10 @@ export default function DatabaseConnectionsPage() {
             <div className="flex items-center justify-between pb-3 border-b border-white/10">
               <div className="flex items-center gap-2">
                 <HardDrive className="w-4 h-4 text-purple-400" />
-                <h3 className="text-sm font-bold text-white">Configured Connections</h3>
+                <h3 className="text-sm font-bold text-white">Active Connections</h3>
               </div>
               <span className="text-xs font-mono text-slate-400">
-                {connections.length} total
+                {connections.length} configured
               </span>
             </div>
 
@@ -498,7 +554,7 @@ export default function DatabaseConnectionsPage() {
                 <p className="text-xs text-slate-400 font-medium">No database connections yet</p>
                 <p className="text-[11px] text-slate-500">
                   {isOwner
-                    ? "Fill in the parameters on the left to add your first database connection."
+                    ? "Fill in parameters to connect your first database (SQL Server, MySQL, Postgres, Supabase, MongoDB, or Firebase)."
                     : "Ask your Organization Owner to configure database connections."}
                 </p>
               </div>
@@ -515,14 +571,27 @@ export default function DatabaseConnectionsPage() {
                           <Server className="w-3.5 h-3.5 text-indigo-400" />
                           <span>{conn.name}</span>
                         </h4>
-                        <p className="text-[11px] text-slate-400 font-mono mt-0.5">
+                        <p className="text-[11px] text-slate-400 font-mono mt-0.5 truncate max-w-[200px]">
                           {conn.host}:{conn.port}
                         </p>
                       </div>
 
-                      <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded-md bg-indigo-500/10 text-indigo-300 border border-indigo-500/20">
-                        {conn.dbType}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded-md bg-indigo-500/10 text-indigo-300 border border-indigo-500/20">
+                          {conn.dbType}
+                        </span>
+                        {isOwner && (
+                          <button
+                            type="button"
+                            disabled={deletingId === conn.id}
+                            onClick={() => handleDeleteConnection(conn.id, conn.name)}
+                            title="Disconnect and remove database"
+                            className="p-1 rounded-md text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors disabled:opacity-40"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-2 gap-2 text-[11px] bg-slate-950/60 p-2 rounded-xl border border-white/5 font-mono text-slate-400">
@@ -530,10 +599,10 @@ export default function DatabaseConnectionsPage() {
                         <span className="text-slate-500">db:</span> {conn.dbName}
                       </div>
                       <div>
-                        <span className="text-slate-500">user:</span> {conn.username}
+                        <span className="text-slate-500">user:</span> {conn.username || "auth"}
                       </div>
                       <div>
-                        <span className="text-slate-500">schema:</span> {conn.schemaContext ? "active" : "pending"}
+                        <span className="text-slate-500">schema:</span> {conn.schemaContext ? "synced" : "pending"}
                       </div>
                       <div className="text-emerald-400 flex items-center gap-1">
                         <Lock className="w-3 h-3" />
@@ -548,7 +617,7 @@ export default function DatabaseConnectionsPage() {
                           type="button"
                           disabled={testingId === conn.id}
                           onClick={() => handleTestConnection(conn.id)}
-                          className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-slate-200 hover:text-white transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                          className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-slate-200 hover:text-white transition-colors flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
                         >
                           {testingId === conn.id ? (
                             <>
@@ -567,7 +636,7 @@ export default function DatabaseConnectionsPage() {
                           type="button"
                           disabled={syncingId === conn.id}
                           onClick={() => handleSyncSchema(conn.id)}
-                          className="px-2.5 py-1 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/30 text-xs text-indigo-300 hover:text-white transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                          className="px-2.5 py-1 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/30 text-xs text-indigo-300 hover:text-white transition-colors flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
                         >
                           {syncingId === conn.id ? (
                             <>
@@ -605,11 +674,11 @@ export default function DatabaseConnectionsPage() {
                               expandedSchemaId === conn.id ? null : conn.id
                             )
                           }
-                          className="w-full flex items-center justify-between p-2 rounded-xl bg-slate-950/50 hover:bg-slate-950 border border-white/5 text-[11px] font-mono text-slate-400 hover:text-slate-200 transition-colors"
+                          className="w-full flex items-center justify-between p-2 rounded-xl bg-slate-950/50 hover:bg-slate-950 border border-white/5 text-[11px] font-mono text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
                         >
                           <span className="flex items-center gap-1.5 text-indigo-400">
                             <Sparkles className="w-3 h-3 text-indigo-400" />
-                            <span>Dynamic RAG Schema Context (Injected to AI)</span>
+                            <span>RAG Schema Metadata (Injected to AI)</span>
                           </span>
                           {expandedSchemaId === conn.id ? (
                             <ChevronUp className="w-3.5 h-3.5" />

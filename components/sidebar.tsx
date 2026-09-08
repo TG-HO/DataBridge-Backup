@@ -12,15 +12,10 @@ import {
   Building2,
   Database,
   Terminal,
+  Plus,
+  Trash2,
 } from "lucide-react";
-
-interface ChatSession {
-  id: string;
-  title: string;
-  model: string;
-  time: string;
-  category: "Today" | "Yesterday" | "Previous";
-}
+import { useQuerySessions } from "@/lib/query-session-context";
 
 interface SidebarProps {
   user?: {
@@ -34,13 +29,19 @@ interface SidebarProps {
 
 export default function Sidebar({ user }: SidebarProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
-  const sessions: ChatSession[] = [];
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const {
+    sessions,
+    activeSessionId,
+    createNewSession,
+    selectSession,
+    deleteSession,
+  } = useQuerySessions();
 
   const orgName = user?.orgName || "Enterprise Workspace";
   const role = user?.role || "MEMBER";
 
-  const filteredSessions = sessions;
+  // Filter out any sessions without user messages for the history count display, or display all
+  const displaySessions = sessions;
 
   return (
     <aside
@@ -73,7 +74,7 @@ export default function Sidebar({ user }: SidebarProps) {
         {/* Toggle Collapse Button */}
         <button
           onClick={() => setIsCollapsed(!isCollapsed)}
-          className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition-colors"
+          className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
           title={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
         >
           {isCollapsed ? (
@@ -111,20 +112,42 @@ export default function Sidebar({ user }: SidebarProps) {
         </Link>
       </div>
 
-      {/* Chat History Section */}
+      {/* Query Sessions Section */}
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
-        {!isCollapsed && (
-          <div className="flex items-center justify-between px-1">
-            <span className="text-[10px] uppercase font-mono tracking-wider text-slate-400">
-              Query Sessions
-            </span>
-            <span className="text-[10px] font-mono text-slate-500">
-              {sessions.length}
-            </span>
+        {/* Header & New Session Button */}
+        {!isCollapsed ? (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between px-1">
+              <span className="text-[10px] uppercase font-mono tracking-wider text-slate-400">
+                Query Sessions
+              </span>
+              <span className="text-[10px] font-mono text-slate-500">
+                {displaySessions.length}
+              </span>
+            </div>
+
+            <button
+              onClick={() => createNewSession()}
+              className="w-full flex items-center justify-center gap-2 p-2 rounded-xl bg-indigo-600/15 hover:bg-indigo-600/25 border border-indigo-500/30 text-indigo-300 hover:text-white text-xs font-semibold transition-all shadow-sm cursor-pointer group"
+              title="Start a new query session"
+            >
+              <Plus className="w-3.5 h-3.5 text-indigo-400 group-hover:scale-110 transition-transform" />
+              <span>New Query Session</span>
+            </button>
+          </div>
+        ) : (
+          <div className="flex justify-center mb-2">
+            <button
+              onClick={() => createNewSession()}
+              className="p-2 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/40 text-indigo-400 hover:text-white transition-all cursor-pointer"
+              title="New Query Session"
+            >
+              <Plus className="w-4 h-4" />
+            </button>
           </div>
         )}
 
-        {sessions.length === 0 ? (
+        {displaySessions.length === 0 ? (
           <div className="py-8 px-2 text-center text-slate-500 text-xs">
             <History className="w-5 h-5 mx-auto mb-2 text-slate-600 opacity-60" />
             {!isCollapsed && (
@@ -138,20 +161,58 @@ export default function Sidebar({ user }: SidebarProps) {
           </div>
         ) : (
           <div className="space-y-1">
-            {filteredSessions.map((s) => (
-              <button
-                key={s.id}
-                onClick={() => setSelectedId(s.id)}
-                className={`w-full flex items-center gap-2 p-2 rounded-xl text-left text-xs transition-all ${
-                  selectedId === s.id
-                    ? "bg-indigo-600/20 text-white border border-indigo-500/30"
-                    : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
-                }`}
-              >
-                <MessageSquare className="w-3.5 h-3.5 shrink-0 text-indigo-400" />
-                {!isCollapsed && <span className="truncate">{s.title}</span>}
-              </button>
-            ))}
+            {displaySessions.map((s) => {
+              const isActive = activeSessionId === s.id;
+              const hasUserQuery = s.messages.some((m) => m.role === "user");
+
+              return (
+                <div
+                  key={s.id}
+                  className={`group relative w-full flex items-center rounded-xl transition-all ${
+                    isActive
+                      ? "bg-indigo-600/20 text-white border border-indigo-500/40 shadow-sm"
+                      : "text-slate-400 hover:bg-white/5 hover:text-slate-200 border border-transparent"
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => selectSession(s.id)}
+                    className="flex-1 flex items-center gap-2.5 p-2 text-left text-xs min-w-0 cursor-pointer"
+                    title={s.title}
+                  >
+                    <MessageSquare
+                      className={`w-3.5 h-3.5 shrink-0 transition-colors ${
+                        isActive ? "text-indigo-400" : "text-slate-500 group-hover:text-slate-300"
+                      }`}
+                    />
+                    {!isCollapsed && (
+                      <div className="truncate flex-1 min-w-0">
+                        <p className="truncate font-medium">{s.title}</p>
+                        <span className="text-[10px] text-slate-500 font-mono block">
+                          {hasUserQuery
+                            ? `${s.messages.filter((m) => m.role === "user").length} queries`
+                            : "New chat"}
+                        </span>
+                      </div>
+                    )}
+                  </button>
+
+                  {!isCollapsed && displaySessions.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deleteSession(s.id);
+                      }}
+                      className="opacity-0 group-hover:opacity-100 p-1.5 mr-1 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-all cursor-pointer"
+                      title="Delete query session"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>

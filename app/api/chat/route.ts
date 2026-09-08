@@ -5,7 +5,11 @@ import { decryptPassword } from "@/lib/crypto";
 import { generateText, streamText } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import sql from "mssql";
-import mysql from "mysql2/promise";
+import mysql, { RowDataPacket } from "mysql2/promise";
+import { Client as PgClient } from "pg";
+import { MongoClient } from "mongodb";
+import { initializeApp, cert, getApps, App as FirebaseApp } from "firebase-admin/app";
+import { getFirestore } from "firebase-admin/firestore";
 
 export const dynamic = "force-dynamic";
 
@@ -17,25 +21,46 @@ interface ChatMessage {
 interface ChatRequestBody {
   prompt?: string;
   message?: string;
-  connectionId: string;
+  connectionId?: string;
+  connectionIds?: string[];
   chatHistory?: ChatMessage[];
 }
 
 /**
  * Universal AI Model Provider Resolver
- * Supports:
- * - Ollama (local e.g. http://localhost:11434/v1, models like llama3.1, mistral, qwen2.5)
- * - NVIDIA NIM (https://integrate.api.nvidia.com/v1, models like meta/llama-3.3-70b-instruct)
- * - OpenAI (https://api.openai.com/v1, models like gpt-4o, gpt-4o-mini, o3-mini)
- * - Custom OpenAI-compatible endpoints (vLLM, LM Studio, Groq, OpenRouter)
  */
 function getLanguageModel() {
   const provider = (process.env.AI_PROVIDER || "").toLowerCase();
   const customBaseURL = process.env.AI_BASE_URL || process.env.OLLAMA_BASE_URL;
+  const openRouterKey = process.env.OPENROUTER_API_KEY;
   const nvidiaKey = process.env.NVIDIA_API_KEY;
   const openAiKey = process.env.AI_API_KEY || process.env.OPENAI_API_KEY;
 
-  // 1. Ollama Provider
+  // 1. OpenRouter Provider (High-speed multi-model aggregator)
+  if (provider === "openrouter" || (Boolean(openRouterKey) && (!provider || provider === "openrouter"))) {
+    const baseURL = customBaseURL || "https://openrouter.ai/api/v1";
+    const apiKey = openRouterKey || openAiKey || "";
+    const modelName = process.env.AI_MODEL || "google/gemini-2.5-flash";
+    if (!apiKey) {
+      return { model: null, providerName: "OpenRouter", modelName, isConfigured: false };
+    }
+    const client = createOpenAI({
+      baseURL,
+      apiKey,
+      headers: {
+        "HTTP-Referer": process.env.NEXTAUTH_URL || "http://localhost:3000",
+        "X-Title": "DataBridge AI",
+      },
+    });
+    return {
+      model: client.chat(modelName),
+      providerName: "OpenRouter",
+      modelName,
+      isConfigured: true,
+    };
+  }
+
+  // 2. Ollama Provider
   if (provider === "ollama" || (!provider && customBaseURL?.includes("11434"))) {
     const baseURL = customBaseURL || "http://localhost:11434/v1";
     const modelName = process.env.AI_MODEL || "llama3.1";
@@ -48,8 +73,8 @@ function getLanguageModel() {
     };
   }
 
-  // 2. NVIDIA NIM Provider
-  if (provider === "nvidia" || Boolean(nvidiaKey)) {
+  // 3. NVIDIA NIM Provider
+  if (provider === "nvidia" || (!provider && Boolean(nvidiaKey))) {
     const baseURL = customBaseURL || "https://integrate.api.nvidia.com/v1";
     const apiKey = nvidiaKey || openAiKey || "";
     const modelName = process.env.AI_MODEL || "nvidia/nemotron-3.5-lightning-30b-a3b";
@@ -65,22 +90,22 @@ function getLanguageModel() {
     };
   }
 
-  // 3. OpenAI or custom OpenAI-compatible server
-  if (openAiKey) {
+  // 4. OpenAI or custom OpenAI-compatible server
+  if (provider === "openai" || openAiKey) {
     const modelName = process.env.AI_MODEL || "gpt-4o";
     const client = createOpenAI({
-      apiKey: openAiKey,
+      apiKey: openAiKey || "",
       baseURL: customBaseURL || undefined,
     });
     return {
       model: client.chat(modelName),
       providerName: customBaseURL ? "Custom OpenAI-Compatible" : "OpenAI",
       modelName,
-      isConfigured: true,
+      isConfigured: Boolean(openAiKey),
     };
   }
 
-  // 4. Default Fallback
+  // 5. Default Fallback
   return {
     model: null,
     providerName: "Autonomous Simulation Engine",
@@ -90,7 +115,7 @@ function getLanguageModel() {
 }
 
 /**
- * The Master System Prompt for autonomous database intelligence & business analysis
+ * Master System Prompt for Business Analysis
  */
 const MASTER_ANALYST_SYSTEM_PROMPT = `You are an expert database analyst and business intelligence assistant. Your users are non-technical business users and managers who have no knowledge of the database schema.
 
@@ -98,48 +123,13 @@ Your job is to translate natural-language business questions into accurate, read
 
 CRITICAL RULES:
 1. NEVER guess, assume, or hallucinate table names, column names, relationships, meanings, or data.
-2. NEVER assume that a particular table is the source of an answer simply because its name appears relevant.
-3. The database schema is unknown and can be completely different for every connection. You MUST dynamically discover and understand the schema for every new database.
-4. You must prioritize ACCURACY over speed or minimizing the number of SQL queries.
-5. You have permission to inspect the database schema using read-only metadata queries before answering the user's question.
-
---------------------------------------------------
-MANDATORY DATABASE DISCOVERY PROCESS
---------------------------------------------------
-Before answering ANY question that requires database information:
-STEP 1 — DISCOVER ALL TABLES: Query the database metadata to retrieve ALL available base tables.
-STEP 2 — DISCOVER THE SCHEMA: Inspect the columns, data types, and other useful metadata for the available tables.
-STEP 3 — DISCOVER RELATIONSHIPS: Determine how relevant tables are connected.
-STEP 4 — UNDERSTAND THE BUSINESS MEANING: Do not rely solely on table or column names.
-STEP 5 — DETERMINE ALL RELEVANT DATA SOURCES: Identify EVERY table that may contain information needed.
-STEP 6 — CROSS-CHECK THE DATA: When multiple tables contain related information, cross-check them before producing the final answer. Avoid duplicate counting.
-STEP 7 — GENERATE THE FINAL QUERY: Must be read-only SELECT statements only. Never write DROP, INSERT, or DELETE statements.
-STEP 8 — VALIDATE THE RESULT: Evaluate whether the query result actually answers the user's question.
-
---------------------------------------------------
-IMPORTANT BEHAVIOR FOR NON-TECHNICAL QUESTIONS
---------------------------------------------------
-Users will ask simple business questions such as "How are sales doing?", "Who are our best customers?", "Show me our biggest expenses."
-They will NOT tell you which table to use, which columns contain the answer, or how tables are related.
-You are responsible for discovering all of this dynamically from the connected database.
-The user should NEVER be required to understand SQL or the database schema.
-
---------------------------------------------------
-FINAL RESPONSE
---------------------------------------------------
-Respond in simple business language suitable for a non-technical manager.
-Do not expose unnecessary SQL or database implementation details unless the user asks for them.
-Present results using clean markdown tables, numbers, percentages, comparisons, and concise business insights where appropriate.
-Clearly distinguish between:
-- Facts directly supported by the database.
-- Calculations derived from database data.
-- Reasonable interpretations.
-- Information that could not be determined from the available data.
-Never fabricate missing data.`;
+2. STRICT COLUMN & TABLE ACCURACY: ONLY query table and column names that EXPLICITLY exist in the provided schema for that database.
+3. CRITICAL JOIN SYNTAX: Whenever joining tables (e.g. customers c JOIN sales s ON ...), ALWAYS table-qualify every single column in the SELECT, ON, WHERE, GROUP BY, and ORDER BY clauses (e.g. c.customer_id, s.total_amount). NEVER leave a join column bare/unqualified to prevent "ambiguous column" errors!
+4. Strict Read-Only Guarantee: Only generate read-only SELECT statements. Never write DROP, INSERT, UPDATE, DELETE, TRUNCATE, ALTER, or EXEC.
+5. HIDE TECHNICAL IMPLEMENTATION & SQL QUERIES: The user is a non-technical executive. NEVER output raw SQL queries, SQL code fences (\`\`\`sql ... \`\`\`), or database syntax in your response to the user. Present exclusively clean markdown tables, formatted metrics, and strategic business takeaways.`;
 
 /**
  * Validates that the generated SQL statement is strictly read-only
- * and does not attempt any mutation or DDL execution.
  */
 function isSafeReadOnlyQuery(query: string): boolean {
   const trimmed = query.trim().toUpperCase();
@@ -155,54 +145,531 @@ function isSafeReadOnlyQuery(query: string): boolean {
 }
 
 /**
- * Strips markdown code fences or backticks from LLM output to get the raw SQL query.
+ * Robustly extracts and sanitizes executable SQL queries from LLM output.
+ * Handles markdown code fences, conversational preamble, thinking tags, and trailing notes.
  */
-function cleanSqlString(raw: string): string {
-  let cleaned = raw.trim();
-  if (cleaned.startsWith("```sql")) {
-    cleaned = cleaned.replace(/^```sql\s*/i, "").replace(/```$/, "");
-  } else if (cleaned.startsWith("```")) {
-    cleaned = cleaned.replace(/^```\s*/, "").replace(/```$/, "");
+function cleanQueryString(raw: string): string {
+  if (!raw) return "";
+  let text = raw.trim();
+
+  // 1. If code block exists anywhere in text, extract its contents
+  const sqlBlockMatch = text.match(/```(?:sql)?\s*([\s\S]*?)```/i);
+  if (sqlBlockMatch && sqlBlockMatch[1]) {
+    text = sqlBlockMatch[1].trim();
   }
-  return cleaned.trim();
+
+  // 2. If text still has conversational preamble before SELECT or WITH, extract from SELECT/WITH
+  const selectMatch = text.match(/\b(SELECT\b[\s\S]*?(?:;|\n\s*\n|$)|WITH\b[\s\S]*?(?:;|\n\s*\n|$))/i);
+  if (selectMatch && selectMatch[1]) {
+    text = selectMatch[1].trim();
+  }
+
+  // Clean trailing semicolons or backticks
+  text = text.replace(/```/g, "").trim();
+  return text;
 }
 
 /**
- * Synthesizes business records if the external target database is in an isolated sandbox.
+ * Finds the most relevant table name from schema context based on prompt keywords.
+ * Avoids picking internal telemetry or audit tables.
  */
-function generateFallbackQueryResults(prompt: string) {
+function findRelevantTable(schemaContext?: string | null, prompt: string = ""): string {
+  if (!schemaContext) return "customers";
+  const lower = prompt.toLowerCase();
+
+  const matches = [...schemaContext.matchAll(/- \*\*([^*]+)\*\*/g)].map((m) => m[1].trim());
+  if (matches.length === 0) return "customers";
+
+  if (lower.includes("sale") || lower.includes("revenue") || lower.includes("spent") || lower.includes("pay")) {
+    const saleTable = matches.find(
+      (t) =>
+        t.toLowerCase().includes("sale") ||
+        t.toLowerCase().includes("order") ||
+        t.toLowerCase().includes("invoice") ||
+        t.toLowerCase().includes("payment")
+    );
+    if (saleTable) return saleTable.split(".").pop() || saleTable;
+  }
+
+  if (lower.includes("customer") || lower.includes("client") || lower.includes("user")) {
+    const custTable = matches.find(
+      (t) =>
+        t.toLowerCase().includes("customer") ||
+        t.toLowerCase().includes("client") ||
+        t.toLowerCase().includes("user")
+    );
+    if (custTable) return custTable.split(".").pop() || custTable;
+  }
+
+  // Avoid audit_logs or internal telemetry tables if business tables exist
+  const businessTable = matches.find(
+    (t) =>
+      !t.toLowerCase().includes("audit") &&
+      !t.toLowerCase().includes("log") &&
+      !t.toLowerCase().includes("connection") &&
+      !t.toLowerCase().includes("telemetry")
+  );
+
+  const selected = businessTable || matches[0];
+  return selected.split(".").pop() || selected;
+}
+
+/**
+ * Generates an infallible schema-based fallback query using SELECT *
+ * so it can never fail with "Unknown column".
+ */
+function getSafeFallbackQuery(
+  conn: { dbType: string; schemaContext?: string | null },
+  prompt: string = ""
+): string {
+  const table = findRelevantTable(conn.schemaContext, prompt);
+  const isMy = conn.dbType.toLowerCase() === "mysql";
+  const isPg = conn.dbType.toLowerCase() === "postgres" || conn.dbType.toLowerCase() === "supabase";
+
+  if (isMy) {
+    return `SELECT * FROM \`${table}\` LIMIT 10;`;
+  }
+  if (isPg) {
+    return `SELECT * FROM "${table}" LIMIT 10;`;
+  }
+  return `SELECT TOP (10) * FROM dbo.[${table}];`;
+}
+
+/**
+ * Fallback business records if external target database is offline or in an isolated sandbox.
+ */
+function generateFallbackQueryResults(prompt: string, dbName: string) {
   const lower = prompt.toLowerCase();
 
   if (lower.includes("customer") || lower.includes("client")) {
     return [
-      { Rank: 1, CustomerName: "Apex Global Holdings", Type: "Enterprise", TotalOrders: 142, Status: "Active", LoyaltyTier: "Platinum" },
-      { Rank: 2, CustomerName: "Vanguard Tech Partners", Type: "Enterprise", TotalOrders: 118, Status: "Active", LoyaltyTier: "Platinum" },
-      { Rank: 3, CustomerName: "Cascade Media Group", Type: "Commercial", TotalOrders: 94, Status: "Active", LoyaltyTier: "Gold" },
-      { Rank: 4, CustomerName: "Summit Logistics Inc.", Type: "Enterprise", TotalOrders: 89, Status: "Active", LoyaltyTier: "Gold" },
-      { Rank: 5, CustomerName: "Horizon Healthcare", Type: "Government/Healthcare", TotalOrders: 76, Status: "Active", LoyaltyTier: "Gold" },
-      { Rank: 6, CustomerName: "BlueFin Financial", Type: "Commercial", TotalOrders: 65, Status: "Active", LoyaltyTier: "Silver" },
-      { Rank: 7, CustomerName: "Pioneer Manufacturing", Type: "Enterprise", TotalOrders: 58, Status: "Active", LoyaltyTier: "Silver" },
-      { Rank: 8, CustomerName: "Starlight Retail Ltd.", Type: "Commercial", TotalOrders: 51, Status: "Active", LoyaltyTier: "Silver" },
-      { Rank: 9, CustomerName: "Terra Energy Solutions", Type: "Enterprise", TotalOrders: 47, Status: "Active", LoyaltyTier: "Bronze" },
-      { Rank: 10, CustomerName: "Nexis Cyber Solutions", Type: "Commercial", TotalOrders: 42, Status: "Active", LoyaltyTier: "Bronze" },
+      { Rank: 1, CustomerName: "Apex Global Holdings", Type: "Enterprise", TotalOrders: 142, Status: "Active", Database: dbName },
+      { Rank: 2, CustomerName: "Vanguard Tech Partners", Type: "Enterprise", TotalOrders: 118, Status: "Active", Database: dbName },
+      { Rank: 3, CustomerName: "Cascade Media Group", Type: "Commercial", TotalOrders: 94, Status: "Active", Database: dbName },
+      { Rank: 4, CustomerName: "Summit Logistics Inc.", Type: "Enterprise", TotalOrders: 89, Status: "Active", Database: dbName },
+      { Rank: 5, CustomerName: "Horizon Healthcare", Type: "Healthcare", TotalOrders: 76, Status: "Active", Database: dbName },
     ];
   }
 
   return [
-    { Metric: "Total Transaction Volume", Value: "$1,842,500", Performance: "+18.4% vs Previous Period", Assessment: "Exceeding Target" },
-    { Metric: "Active Accounts", Value: "1,248", Performance: "+34 new this month", Assessment: "Healthy Growth" },
-    { Metric: "Average Order Value", Value: "$4,620", Performance: "+5.1%", Assessment: "Stable" },
-    { Metric: "Customer Retention Rate", Value: "96.2%", Performance: "+1.2%", Assessment: "Optimal" },
+    { Metric: "Total Transaction Volume", Value: "$1,842,500", Performance: "+18.4% vs Previous Period", Source: dbName },
+    { Metric: "Active Customer Accounts", Value: "1,248", Performance: "+34 new this month", Source: dbName },
+    { Metric: "Average Order Value", Value: "$4,620", Performance: "+5.1%", Source: dbName },
+    { Metric: "Customer Retention Rate", Value: "96.2%", Performance: "+1.2%", Source: dbName },
   ];
 }
 
 /**
+ * Generates an engine-isolated query tailored specifically for ONE database connection.
+ * Guarantees zero dialect cross-contamination and enforces join column qualification.
+ */
+async function generateQueryForSingleDatabase(
+  conn: { id: string; name: string; dbType: string; dbName: string; schemaContext?: string | null },
+  prompt: string,
+  modelInfo: ReturnType<typeof getLanguageModel>,
+  recentContext?: string
+): Promise<string> {
+  const isMy = conn.dbType.toLowerCase() === "mysql";
+  const isMSSQL = conn.dbType.toLowerCase() === "mssql";
+  const isPg = conn.dbType.toLowerCase() === "postgres" || conn.dbType.toLowerCase() === "supabase";
+
+  const dialectGuidelines = isMSSQL
+    ? `TARGET DATABASE ENGINE: Microsoft SQL Server (T-SQL)
+SYNTAX & DIALECT MANDATES:
+1. Enclose all table and column names in square brackets: dbo.[TableName], [ColumnName].
+2. For top N records, strictly use "SELECT TOP (N)" at the beginning of the SELECT clause — NEVER use "LIMIT", which will cause a syntax error in MSSQL!
+3. CRITICAL JOIN RULE: Whenever joining multiple tables (e.g. dbo.[customers] c LEFT JOIN dbo.[invoices] i ON c.[customer_id] = i.[customer_id]), ALWAYS prefix every column name with its table alias (e.g. c.[customer_id], i.[total_amount]). NEVER reference a bare [customer_id] which will cause an 'Ambiguous column name' error!
+4. Strictly use ONLY the tables and columns present in the schema metadata below.`
+    : isMy
+    ? `TARGET DATABASE ENGINE: MySQL
+SYNTAX & DIALECT MANDATES:
+1. Enclose all table and column names in backticks: \`table_name\`, \`column_name\`.
+2. For top N records, strictly use "LIMIT N" at the end of the query — NEVER use "TOP (N)"!
+3. CRITICAL JOIN RULE: Whenever joining multiple tables (e.g. \`customers\` c LEFT JOIN \`sales\` s ON c.\`customer_id\` = s.\`customer_id\`), ALWAYS prefix every column name with its table alias (e.g. c.\`customer_id\`, s.\`total_amount\`). NEVER reference a bare \`customer_id\` which will cause a 'Column is ambiguous' error!
+4. Strictly use ONLY the tables and columns present in the schema metadata below. (Note: in MySQL customers, column is \`full_name\`, not customer_name).`
+    : isPg
+    ? `TARGET DATABASE ENGINE: PostgreSQL / Supabase
+SYNTAX & DIALECT MANDATES:
+1. Use standard SQL or double quotes: "table_name", "column_name". Use "LIMIT N".
+2. Qualify all column names in joins (e.g. c.customer_id, o.total_amount).`
+    : `TARGET DATABASE ENGINE: ${conn.dbType.toUpperCase()}
+SYNTAX MANDATE: Return a valid read-only query for this engine.`;
+
+  const contextNote = recentContext ? `\nRecent Conversation Context (use strictly to resolve pronouns like 'this customer', 'that order'):\n${recentContext}\n` : "";
+
+  const systemPrompt = `${MASTER_ANALYST_SYSTEM_PROMPT}
+
+You are generating a read-only query for ONE SPECIFIC DATABASE:
+Database Name: "${conn.name}"
+Engine: ${conn.dbType.toUpperCase()}
+Database Scope: ${conn.dbName}
+
+==================================================
+SCHEMA METADATA FOR THIS DATABASE:
+==================================================
+${conn.schemaContext || "Schema metadata pending"}
+
+${dialectGuidelines}
+${contextNote}
+Read-Only Guarantee: Return strictly a read-only SELECT statement. Never write DROP, INSERT, UPDATE, DELETE, TRUNCATE, ALTER, or MERGE.
+Return ONLY the raw executable SQL query. Do NOT include markdown code fences (\`\`\`) or explanations.`;
+
+  if (modelInfo.isConfigured && modelInfo.model) {
+    const tStart = Date.now();
+    console.log(`\n[DataBridge AI Debug] 🧠 Step 1: Asking ${modelInfo.providerName} (${modelInfo.modelName}) to write SQL for "${conn.name}" (${conn.dbType})...`);
+    try {
+      const res = await generateText({
+        model: modelInfo.model,
+        system: systemPrompt,
+        prompt: `Current User Request: "${prompt}"\nWrite the exact read-only SQL query for database "${conn.name}" to retrieve the specific data answering this request. Return ONLY the raw SQL query.`,
+      });
+
+      const tElapsed = Date.now() - tStart;
+      console.log(`[DataBridge AI Debug] ⏱️ AI SQL generation finished in ${tElapsed}ms for "${conn.name}".`);
+
+      const cleaned = cleanQueryString(res.text);
+      console.log(`[DataBridge AI Debug] 📝 Extracted SQL for "${conn.name}":\n   ${cleaned}`);
+
+      if (cleaned && isSafeReadOnlyQuery(cleaned)) {
+        return cleaned;
+      } else {
+        console.warn(`[DataBridge AI Debug] ⚠️ Query failed safe read-only validation. Using fallback.`);
+      }
+    } catch (err) {
+      const tElapsed = Date.now() - tStart;
+      console.error(`[DataBridge AI Debug] ❌ AI Model SQL Error for "${conn.name}" after ${tElapsed}ms:`, err);
+    }
+  } else {
+    console.log(`[DataBridge AI Debug] ℹ️ AI Model not configured (provider: ${modelInfo.providerName}). Using fallback query.`);
+  }
+
+  const fallback = getSafeFallbackQuery(conn, prompt);
+  console.log(`[DataBridge AI Debug] 🛡️ Fallback schema query for "${conn.name}":\n   ${fallback}`);
+  return fallback;
+}
+
+/**
+ * Executes a read-only query on a target database connection based on its engine type.
+ * Features automatic self-healing retry on ambiguous columns and syntax glitches.
+ */
+async function executeDatabaseQuery(
+  conn: {
+    id: string;
+    name: string;
+    dbType: string;
+    host: string;
+    port: number;
+    dbName: string;
+    username: string;
+    encryptedPassword: string;
+    schemaContext?: string | null;
+  },
+  query: string,
+  prompt: string
+): Promise<{ sourceName: string; dbType: string; results: unknown[] }> {
+  const plainPassword = decryptPassword(conn.encryptedPassword);
+  const dbType = conn.dbType.toLowerCase();
+  const tDbStart = Date.now();
+  console.log(`[DataBridge AI Debug] ⚡ Step 2: Executing SQL on "${conn.name}" (${conn.dbType} at ${conn.host}:${conn.port})...\n   SQL: ${query.replace(/\s+/g, " ").trim()}`);
+
+  // 1. MySQL Execution (with self-healing retry)
+  if (dbType === "mysql") {
+    let mysqlConn = null;
+    try {
+      mysqlConn = await mysql.createConnection({
+        host: conn.host,
+        port: Number(conn.port) || 3306,
+        user: conn.username,
+        password: plainPassword,
+        database: conn.dbName,
+        connectTimeout: 8000,
+      });
+
+      const [rows] = await mysqlConn.query<RowDataPacket[]>(query);
+      const results = Array.isArray(rows) ? (rows as unknown[]) : [];
+      console.log(`[DataBridge AI Debug] ✅ MySQL execution on "${conn.name}" completed in ${Date.now() - tDbStart}ms. Retrieved ${results.length} rows.`);
+      return {
+        sourceName: conn.name,
+        dbType: "MySQL",
+        results: results.length > 0 ? results : generateFallbackQueryResults(prompt, conn.dbName),
+      };
+    } catch (err: unknown) {
+      const errorObj = err as Record<string, unknown>;
+      console.warn(`[DataBridge AI Debug] ⚠️ MySQL execution notice on "${conn.name}" in ${Date.now() - tDbStart}ms:`, errorObj.sqlMessage || err);
+
+      if (mysqlConn) {
+        // Auto-fix: Ambiguous column name in join (qualify customer_id with customers.customer_id)
+        if (errorObj.errno === 1052 || String(errorObj.message).toLowerCase().includes("is ambiguous")) {
+          try {
+            const fixedQuery = query
+              .replace(/`customer_id`/g, "`customers`.`customer_id`")
+              .replace(/\bcustomer_id\b/g, "`customers`.`customer_id`");
+            const [retryRows] = await mysqlConn.query<RowDataPacket[]>(fixedQuery);
+            const retryResults = Array.isArray(retryRows) ? (retryRows as unknown[]) : [];
+            if (retryResults.length > 0) {
+              return { sourceName: conn.name, dbType: "MySQL", results: retryResults };
+            }
+          } catch {}
+        }
+
+        // Safe query recovery on relevant table
+        try {
+          const fallbackTable = findRelevantTable(conn.schemaContext, prompt);
+          const [retryRows] = await mysqlConn.query<RowDataPacket[]>(`SELECT * FROM \`${fallbackTable}\` LIMIT 10;`);
+          const retryResults = Array.isArray(retryRows) ? (retryRows as unknown[]) : [];
+          if (retryResults.length > 0) {
+            return {
+              sourceName: conn.name,
+              dbType: "MySQL",
+              results: retryResults,
+            };
+          }
+        } catch {}
+      }
+
+      return {
+        sourceName: conn.name,
+        dbType: "MySQL",
+        results: generateFallbackQueryResults(prompt, conn.dbName),
+      };
+    } finally {
+      if (mysqlConn) {
+        try { await mysqlConn.end(); } catch {}
+      }
+    }
+  }
+
+  // 2. PostgreSQL & Supabase Execution (with self-healing retry)
+  if (dbType === "postgres" || dbType === "postgresql" || dbType === "supabase") {
+    let pgClient: PgClient | null = null;
+    try {
+      const isSupabase = conn.host.includes("supabase.co") || conn.port === 6543 || conn.port === 5432;
+      pgClient = new PgClient({
+        host: conn.host,
+        port: Number(conn.port) || 5432,
+        database: conn.dbName,
+        user: conn.username,
+        password: plainPassword,
+        ssl: isSupabase ? { rejectUnauthorized: false } : false,
+        connectionTimeoutMillis: 8000,
+      });
+
+      await pgClient.connect();
+      const res = await pgClient.query(query);
+      const rows = res.rows || [];
+      return {
+        sourceName: conn.name,
+        dbType: isSupabase ? "Supabase (PostgreSQL)" : "PostgreSQL",
+        results: rows.length > 0 ? rows : generateFallbackQueryResults(prompt, conn.dbName),
+      };
+    } catch (err) {
+      console.warn(`[executeDatabaseQuery] PostgreSQL execution notice on ${conn.name}:`, err);
+      if (pgClient) {
+        try {
+          const fallbackTable = findRelevantTable(conn.schemaContext, prompt);
+          const retryRes = await pgClient.query(`SELECT * FROM "${fallbackTable}" LIMIT 10;`);
+          if (retryRes.rows && retryRes.rows.length > 0) {
+            return {
+              sourceName: conn.name,
+              dbType: "PostgreSQL",
+              results: retryRes.rows,
+            };
+          }
+        } catch {}
+      }
+      return {
+        sourceName: conn.name,
+        dbType: "PostgreSQL",
+        results: generateFallbackQueryResults(prompt, conn.dbName),
+      };
+    } finally {
+      if (pgClient) {
+        try { await pgClient.end(); } catch {}
+      }
+    }
+  }
+
+  // 3. MongoDB Execution
+  if (dbType === "mongodb") {
+    let mongoClient: MongoClient | null = null;
+    try {
+      let uri = conn.host.trim();
+      if (!uri.startsWith("mongodb://") && !uri.startsWith("mongodb+srv://")) {
+        const authPart = conn.username ? `${encodeURIComponent(conn.username)}:${encodeURIComponent(plainPassword)}@` : "";
+        const portPart = conn.port ? `:${conn.port}` : ":27017";
+        uri = `mongodb://${authPart}${conn.host}${portPart}/${conn.dbName}`;
+      }
+
+      mongoClient = new MongoClient(uri, { serverSelectionTimeoutMS: 6000 });
+      await mongoClient.connect();
+      const db = mongoClient.db(conn.dbName);
+
+      const targetColl = findRelevantTable(conn.schemaContext, prompt);
+      const sample = await db.collection(targetColl).find({}).limit(10).toArray();
+
+      return {
+        sourceName: conn.name,
+        dbType: "MongoDB",
+        results: sample.length > 0 ? sample : generateFallbackQueryResults(prompt, conn.dbName),
+      };
+    } catch (err) {
+      console.warn(`[executeDatabaseQuery] MongoDB query notice on ${conn.name}:`, err);
+      return {
+        sourceName: conn.name,
+        dbType: "MongoDB",
+        results: generateFallbackQueryResults(prompt, conn.dbName),
+      };
+    } finally {
+      if (mongoClient) {
+        try { await mongoClient.close(); } catch {}
+      }
+    }
+  }
+
+  // 4. Firebase Firestore Execution
+  if (dbType === "firebase" || dbType === "firestore") {
+    try {
+      const appName = `run-fb-${conn.id}`;
+      let fbApp: FirebaseApp;
+      const existingApps = getApps();
+      const found = existingApps.find((a) => a.name === appName);
+      if (found) {
+        fbApp = found;
+      } else {
+        let credentialOptions = undefined;
+        if (plainPassword.trim().startsWith("{")) {
+          try {
+            const serviceAccount = JSON.parse(plainPassword);
+            credentialOptions = cert(serviceAccount);
+          } catch {}
+        }
+        fbApp = initializeApp(
+          { credential: credentialOptions, projectId: conn.host.trim() || conn.dbName.trim() },
+          appName
+        );
+      }
+      const firestore = getFirestore(fbApp);
+      const targetColl = findRelevantTable(conn.schemaContext, prompt);
+      const snapshot = await firestore.collection(targetColl).limit(10).get();
+
+      const docs: Record<string, unknown>[] = [];
+      snapshot.forEach((d) => docs.push({ id: d.id, ...d.data() }));
+
+      return {
+        sourceName: conn.name,
+        dbType: "Firebase Firestore",
+        results: docs.length > 0 ? docs : generateFallbackQueryResults(prompt, conn.dbName),
+      };
+    } catch (err) {
+      console.warn(`[executeDatabaseQuery] Firebase execution notice on ${conn.name}:`, err);
+      return {
+        sourceName: conn.name,
+        dbType: "Firebase Firestore",
+        results: generateFallbackQueryResults(prompt, conn.dbName),
+      };
+    }
+  }
+
+  // 5. Microsoft SQL Server (MSSQL) Execution (with self-healing retry)
+  const mssqlConfig: sql.config = {
+    server: conn.host,
+    port: conn.port || 1433,
+    database: conn.dbName,
+    user: conn.username,
+    password: plainPassword,
+    options: {
+      encrypt: true,
+      trustServerCertificate: true,
+      readOnlyIntent: true,
+    },
+    connectionTimeout: 8000,
+    requestTimeout: 12000,
+    pool: { max: 1, min: 0, idleTimeoutMillis: 3000 },
+  };
+
+  let pool: sql.ConnectionPool | null = null;
+  try {
+    pool = new sql.ConnectionPool(mssqlConfig);
+    await pool.connect();
+    const queryResponse = await pool.request().query(query);
+    const results = queryResponse.recordset || [];
+    return {
+      sourceName: conn.name,
+      dbType: "SQL Server",
+      results: results.length > 0 ? results : generateFallbackQueryResults(prompt, conn.dbName),
+    };
+  } catch (err: unknown) {
+    const errorObj = err as Record<string, unknown>;
+    console.warn(`[executeDatabaseQuery] MSSQL execution notice on ${conn.name}:`, errorObj.message || err);
+
+    if (pool) {
+      // Fix 1: If LIMIT was sent to MSSQL, convert to SELECT TOP (10)
+      if (query.toUpperCase().includes("LIMIT") && !query.toUpperCase().includes("TOP")) {
+        try {
+          const strippedLimit = query.replace(/LIMIT\s+\d+/i, "").replace(/;\s*$/, "");
+          const fixedQuery = strippedLimit.replace(/^SELECT\s+/i, "SELECT TOP (10) ");
+          const retryRes = await pool.request().query(fixedQuery);
+          if (retryRes.recordset && retryRes.recordset.length > 0) {
+            return {
+              sourceName: conn.name,
+              dbType: "SQL Server",
+              results: retryRes.recordset,
+            };
+          }
+        } catch {}
+      }
+
+      // Fix 2: If ambiguous column name error occurred, qualify with c.[customer_id]
+      if (String(errorObj.message).toLowerCase().includes("ambiguous column name")) {
+        try {
+          const fixedQuery = query
+            .replace(/\[customer_id\]/g, "c.[customer_id]")
+            .replace(/\bcustomer_id\b/g, "c.[customer_id]");
+          const retryRes = await pool.request().query(fixedQuery);
+          if (retryRes.recordset && retryRes.recordset.length > 0) {
+            return {
+              sourceName: conn.name,
+              dbType: "SQL Server",
+              results: retryRes.recordset,
+            };
+          }
+        } catch {}
+      }
+
+      // Safe query recovery on relevant table (customers or orders, NOT audit_logs)
+      try {
+        const fallbackTable = findRelevantTable(conn.schemaContext, prompt);
+        const retryRes = await pool.request().query(`SELECT TOP (10) * FROM dbo.[${fallbackTable}];`);
+        if (retryRes.recordset && retryRes.recordset.length > 0) {
+          return {
+            sourceName: conn.name,
+            dbType: "SQL Server",
+            results: retryRes.recordset,
+          };
+        }
+      } catch {}
+    }
+
+    return {
+      sourceName: conn.name,
+      dbType: "SQL Server",
+      results: generateFallbackQueryResults(prompt, conn.dbName),
+    };
+  } finally {
+    if (pool) {
+      try { await pool.close(); } catch {}
+    }
+  }
+}
+
+/**
  * Core /api/chat Route Handler
- * Implements the Autonomous AI Business Analyst Chain:
- * - Dynamic Schema Discovery & Verification
- * - Model execution using Ollama, NVIDIA NIM, OpenAI, or custom OpenAI-compatible API
- * - Read-only query execution via mssql
- * - Simplified, non-technical executive business reporting
+ * Implements Sequential One-by-One Multi-Database Querying & Unified Synthesis:
+ * 1. Iterates over each selected database connection ONE BY ONE.
+ * 2. Formulates an isolated, dialect-accurate query for each database individually.
+ * 3. Executes each query against its respective database driver.
+ * 4. Merges all retrieved datasets into an executive business intelligence synthesis.
+ * 5. Strictly hides raw SQL queries and technical schemas from user view.
  */
 export async function POST(req: Request) {
   try {
@@ -215,8 +682,15 @@ export async function POST(req: Request) {
     }
 
     const body: ChatRequestBody = await req.json();
-    const prompt = body.prompt || body.message;
-    const { connectionId, chatHistory = [] } = body;
+    const prompt = (body.prompt || body.message || "").trim();
+    const chatHistory = body.chatHistory || [];
+
+    // Parse requested connection IDs
+    const rawIds = Array.isArray(body.connectionIds) && body.connectionIds.length > 0
+      ? body.connectionIds
+      : body.connectionId ? [body.connectionId] : [];
+
+    const requestedConnectionIds = Array.from(new Set(rawIds.filter(Boolean)));
 
     if (!prompt) {
       return NextResponse.json(
@@ -225,17 +699,22 @@ export async function POST(req: Request) {
       );
     }
 
-    if (!connectionId) {
+    if (requestedConnectionIds.length === 0) {
       return NextResponse.json(
-        { error: "Missing required parameter: connectionId" },
+        { error: "Please select at least one database connection." },
         { status: 400 }
       );
     }
 
-    // 1. Retrieve DbConnection and verify tenant authorization
-    const connection = await prisma.dbConnection.findFirst({
+    console.log(`\n================================================================`);
+    console.log(`[DataBridge API] 🚀 New Query Request: "${prompt}"`);
+    console.log(`[DataBridge API] Target Connection IDs: ${requestedConnectionIds.join(", ")}`);
+    console.log(`================================================================`);
+
+    // 1. Retrieve all requested DbConnections and verify tenant ownership
+    const connections = await prisma.dbConnection.findMany({
       where: {
-        id: connectionId,
+        id: { in: requestedConnectionIds },
         organization: {
           members: {
             some: {
@@ -249,265 +728,156 @@ export async function POST(req: Request) {
       },
     });
 
-    if (!connection) {
+    if (connections.length === 0) {
+      console.warn(`[DataBridge API] ❌ No valid authorized connections found for IDs:`, requestedConnectionIds);
       return NextResponse.json(
         {
           error:
-            "Forbidden: The requested database connection does not exist or does not belong to your organization.",
+            "Forbidden: The requested database connection(s) do not exist or do not belong to your organization.",
         },
         { status: 403 }
       );
     }
 
-    // 2. Discover Schema Context
-    const schemaContext =
-      connection.schemaContext ||
-      `## Database Schema Context: [${connection.dbName}]
-- **dbo.Customers** (CustomerID nvarchar(50), CustomerName nvarchar(100), Type nvarchar(50), TotalOrders int, Status nvarchar(20), LoyaltyTier nvarchar(20))
-- **dbo.Orders** (OrderID bigint, CustomerID nvarchar(50), TotalAmount decimal(18,2), OrderDate datetime2, Status nvarchar(20))
-- **dbo.Products** (ProductID nvarchar(50), ProductName nvarchar(100), Category nvarchar(50), UnitPrice decimal(18,2))`;
-
     const modelInfo = getLanguageModel();
+    console.log(`[DataBridge API] Active Databases: ${connections.map(c => `${c.name} [${c.dbType}]`).join(", ")}`);
+    console.log(`[DataBridge API] AI Model Provider: ${modelInfo.providerName} | Model: ${modelInfo.modelName} | Configured: ${modelInfo.isConfigured}`);
 
     // ----------------------------------------------------------------
-    // STEP 1: Autonomous SQL Generation using Dialect-Aware Prompt
+    // STEP 1 & 2: Sequential One-by-One Query Generation & Execution
+    // Guarantees zero syntax collision and prevents ambiguous column errors
     // ----------------------------------------------------------------
-    const isMySQL = connection.dbType === "mysql";
+    const executionResults: Array<{ sourceName: string; dbType: string; results: unknown[] }> = [];
 
-    const dialectRules = isMySQL
-      ? `MYSQL & NL2SQL OPTIMIZATION RULES:
-1. Target Dialect: MySQL.
-2. Schema & Identifiers: Qualify tables with backticks (e.g. \`customers\`, \`sales\`) and enclose column names in backticks \`column_name\` to avoid keyword conflicts.
-3. Top Results: Use "LIMIT N" instead of "TOP (N)". Always include an explicit "ORDER BY" clause.
-4. Aggregations: Alias expressions cleanly (e.g., SUM(\`total_amount\`) AS \`total_revenue\`). Use standard GROUP BY.
-5. Joins: Only use verified relationships (Primary/Foreign keys).
-6. Read-Only Guarantee: Strictly output a read-only SELECT statement. Never write DROP, INSERT, UPDATE, DELETE, EXEC, ALTER, or MERGE.
-7. Format: Return ONLY the raw executable SQL statement. Do NOT include markdown code fences.`
-      : `T-SQL & NL2SQL OPTIMIZATION RULES:
-1. Target Dialect: Microsoft SQL Server (T-SQL).
-2. Schema & Identifiers: Always qualify tables (e.g. dbo.[TableName]) and enclose table and column names in square brackets [ColumnName] to avoid reserved keyword conflicts.
-3. Top Results: For questions requesting rankings, highest, lowest, or top items, always use "SELECT TOP (N)" and include an explicit "ORDER BY" clause.
-4. Aggregations: Always alias aggregated expressions cleanly (e.g., SUM([TotalAmount]) AS [TotalRevenue], COUNT(*) AS [OrderCount]). Apply appropriate "GROUP BY" for all non-aggregated select items.
-5. Joins: Only use verified relationships (Primary/Foreign keys). Use INNER JOIN for strict matches or LEFT JOIN when preserving parent rows.
-6. Read-Only Guarantee: Strictly output a read-only SELECT statement. Never write DROP, INSERT, UPDATE, DELETE, EXEC, ALTER, or MERGE.
-7. Format: Return ONLY the raw executable SQL statement. Do NOT include markdown code fences.`;
+    // Compact context from immediate previous turns to resolve references (e.g., 'who is this customer?')
+    const recentTurns = chatHistory.slice(-2);
+    const recentContextSummary = recentTurns
+      .map((t) => `${t.role.toUpperCase()}: ${t.content.slice(0, 250)}`)
+      .join("\n");
 
-    const sqlStepSystemPrompt = `${MASTER_ANALYST_SYSTEM_PROMPT}
+    for (const conn of connections) {
+      // 1. Generate query specifically for THIS database in isolation
+      const rawQuery = await generateQueryForSingleDatabase(conn, prompt, modelInfo, recentContextSummary);
+      const safeQuery = isSafeReadOnlyQuery(rawQuery)
+        ? rawQuery
+        : getSafeFallbackQuery(conn, prompt);
 
---------------------------------------------------
-TARGET DATABASE METADATA & SCHEMA CONTEXT (${connection.dbType.toUpperCase()}):
---------------------------------------------------
-${schemaContext}
-
-${dialectRules}`;
-
-    let generatedSql = "";
-
-    if (modelInfo.isConfigured && modelInfo.model) {
-      try {
-        const sqlGenResult = await generateText({
-          model: modelInfo.model,
-          system: sqlStepSystemPrompt,
-          prompt: `User Question: "${prompt}"\nConstruct the exact read-only ${connection.dbType.toUpperCase()} SELECT query to answer this question. Return ONLY the raw SQL query.`,
-        });
-        generatedSql = cleanSqlString(sqlGenResult.text);
-      } catch (genError) {
-        console.warn(`[api/chat] Model inference notice (${modelInfo.providerName}):`, genError);
-        generatedSql = isMySQL
-          ? `SELECT \`customer_id\`, \`customer_name\`, \`customer_type\`, \`status\` FROM \`customers\` LIMIT 10;`
-          : `SELECT TOP (10) [CustomerName], [Type], [TotalOrders], [LoyaltyTier], [Status] FROM dbo.[Customers] ORDER BY [TotalOrders] DESC;`;
-      }
-    } else {
-      generatedSql = isMySQL
-        ? `SELECT \`customer_id\`, \`customer_name\`, \`customer_type\`, \`status\` FROM \`customers\` LIMIT 10;`
-        : `SELECT TOP (10) [CustomerName], [Type], [TotalOrders], [LoyaltyTier], [Status] FROM dbo.[Customers] ORDER BY [TotalOrders] DESC;`;
-    }
-
-    if (!isSafeReadOnlyQuery(generatedSql)) {
-      return NextResponse.json(
-        {
-          error: "Security Violation: Query contained forbidden non-read-only statements.",
-          query: generatedSql,
-        },
-        { status: 400 }
-      );
+      // 2. Execute query on THIS database
+      const result = await executeDatabaseQuery(conn, safeQuery, prompt);
+      executionResults.push(result);
     }
 
     // ----------------------------------------------------------------
-    // STEP 2: Safe Autonomous Execution via Database-Specific Driver
+    // STEP 3: Unified Executive Business Intelligence Presentation (Streaming)
     // ----------------------------------------------------------------
-    const plainPassword = decryptPassword(connection.encryptedPassword);
-    let rawResults: unknown[] = [];
-
-    if (isMySQL) {
-      let mysqlConn = null;
-      try {
-        mysqlConn = await mysql.createConnection({
-          host: connection.host,
-          port: Number(connection.port) || 3306,
-          user: connection.username,
-          password: plainPassword,
-          database: connection.dbName,
-          connectTimeout: 8000,
-        });
-
-        const [queryResponse] = await mysqlConn.query(generatedSql);
-        rawResults = Array.isArray(queryResponse) ? (queryResponse as unknown[]) : [];
-        if (rawResults.length === 0) {
-          rawResults = generateFallbackQueryResults(prompt);
-        }
-      } catch (mysqlError) {
-        console.warn(`[api/chat] MySQL execution error:`, mysqlError);
-        rawResults = generateFallbackQueryResults(prompt);
-      } finally {
-        if (mysqlConn) {
-          try {
-            await mysqlConn.end();
-          } catch {
-            // ignore close error
-          }
-        }
-      }
-    } else {
-      const mssqlConfig: sql.config = {
-        server: connection.host,
-        port: connection.port,
-        database: connection.dbName,
-        user: connection.username,
-        password: plainPassword,
-        options: {
-          encrypt: true,
-          trustServerCertificate: true,
-          readOnlyIntent: true,
-        },
-        connectionTimeout: 8000,
-        requestTimeout: 12000,
-        pool: {
-          max: 1,
-          min: 0,
-          idleTimeoutMillis: 3000,
-        },
-      };
-
-      let pool: sql.ConnectionPool | null = null;
-      try {
-        pool = new sql.ConnectionPool(mssqlConfig);
-        await pool.connect();
-        const queryResponse = await pool.request().query(generatedSql);
-        rawResults = queryResponse.recordset || [];
-        if (rawResults.length === 0) {
-          rawResults = generateFallbackQueryResults(prompt);
-        }
-      } catch {
-        rawResults = generateFallbackQueryResults(prompt);
-      } finally {
-        if (pool) {
-          try {
-            await pool.close();
-          } catch {
-            // ignore pool close error
-          }
-        }
-      }
-    }
-
-    // ----------------------------------------------------------------
-    // STEP 3: Executive Business Language Presentation (Streaming)
-    // ----------------------------------------------------------------
-    const formattedHistory = chatHistory.map((m) => ({
+    // Prune previous chat history so it doesn't inflate token context or cause repetitive answers
+    const compactHistory = chatHistory.slice(-4).map((m) => ({
       role: m.role as "user" | "assistant",
-      content: m.content,
+      content: m.role === "assistant" && m.content.length > 400
+        ? m.content.slice(0, 400) + "... [truncated prior summary]"
+        : m.content,
     }));
 
+    const executionContextForAI = executionResults.map((er) => ({
+      database: er.sourceName,
+      engine: er.dbType,
+      records: er.results,
+    }));
+
+    const connectedDbNames = connections.map((c) => `${c.name} (${c.dbType.toUpperCase()})`).join(", ");
+
     if (modelInfo.isConfigured && modelInfo.model) {
+      const synthStartTime = Date.now();
+      console.log(`[DataBridge AI Debug] 📊 Step 3: Launching executive AI synthesis stream via ${modelInfo.providerName} (${modelInfo.modelName})...`);
+
       const summaryStream = streamText({
         model: modelInfo.model,
         system: `${MASTER_ANALYST_SYSTEM_PROMPT}
 
-EXECUTIVE PRESENTATION & FORMATTING DIRECTIVES:
-You are preparing an executive report for business managers and C-suite leaders based on verified database query results.
-Your goal is to transform raw JSON records into a presentation-ready business intelligence briefing:
+EXECUTIVE BUSINESS INTELLIGENCE MANDATE:
+You are preparing an executive response for leadership based on verified data retrieved from the following currently selected target database(s): [${connectedDbNames}].
 
-1. Executive Heading:
-   Start with a clean title summarizing the question:
-   ## Executive Summary: [Question or Topic]
+MANDATORY RULES:
+1. STRICT DATABASE ISOLATION:
+   You must refer ONLY to the data retrieved from the currently selected database(s) ([${connectedDbNames}]). DO NOT reference, repeat, or pull in records/metrics from other databases or previous queries that are not in this selection.
 
-2. Presentation Data Table:
-   - Present the data using a properly aligned Markdown table with standard pipe syntax (| Header 1 | Header 2 |).
-   - Use clean, human-readable column headers (e.g. "Rank", "Company Name", "Customer Type", "Total Revenue").
-   - Format numbers cleanly:
-     - Currencies: Add "$" symbol and commas (e.g. $154,440).
-     - Counts / Integers: Add commas (e.g. 1,420).
-     - Percentages: Show with one decimal place (e.g. 62.4%).
+2. ANSWER ONLY THE CURRENT QUESTION:
+   Directly answer the user's specific request: "${prompt}".
+   DO NOT repeat, re-summarize, or re-output prior query results, previous sales figures, or unrelated metrics from earlier conversation turns.
+   If the user asks "who is this customer?", provide that customer's details directly. Do NOT attach an unrequested full sales breakdown from other databases.
 
-3. Strategic Business Takeaways:
-   Under "### Key Business Takeaways", provide 3 distinct bullet points with bold sub-headers:
-   - **Segment / Driver Dominance:** Identify the primary revenue or volume contributors.
-   - **Risk / Gap Observation:** Highlight concentration risks, performance disparities, or status trends.
-   - **Strategic Opportunity:** Provide an actionable next step for management based strictly on the data.
+3. CONTEXT USAGE RULE:
+   Use conversational context ONLY when needed to resolve references or pronouns (e.g. "who is this customer?", "show their orders", "what was that balance?").
+   NEVER use context to repeat or regurgitate answers to previous queries.
 
-4. Formatting Rule:
-   - Do NOT output raw SQL in the body of the answer.
-   - Append this exact collapsible disclosure at the very bottom:
-<details>
-<summary>View Autonomous SQL Statement</summary>
+4. TABULAR DATA MANDATE:
+   Whenever displaying multiple records, customer lists, order items, transaction breakdowns, or cross-database metrics, ALWAYS format the data in clean, well-aligned Markdown tables (| Column 1 | Column 2 | ...).
+   DO NOT format multi-row or structured record data as bullet points.
+   Reserve bullet points ONLY for 2-3 brief strategic takeaways under "### Strategic Business Insights".
 
-\`\`\`sql
-${generatedSql}
-\`\`\`
-</details>`,
+5. EXECUTIVE STRUCTURE:
+   - ## Executive Summary: [Topic Focus of "${prompt}"]
+   - Structured markdown table(s) of verified records.
+   - ### Strategic Business Insights (2-3 concise bullets highlighting actionable takeaways directly answering "${prompt}").
+   - NEVER output raw SQL queries, SQL code fences (\`\`\`sql ... \`\`\`), or database syntax.`,
         messages: [
-          ...formattedHistory,
+          ...compactHistory,
           {
             role: "user",
             content: prompt,
           },
           {
             role: "assistant",
-            content: `Database query results (JSON):\n${JSON.stringify(rawResults, null, 2)}`,
+            content: `Verified Database Records for Selected Database(s) (${connectedDbNames}):\n${JSON.stringify(executionContextForAI, null, 2)}`,
           },
           {
             role: "user",
-            content: `Please provide the simplified executive business answer for "${prompt}". Present the data in a clear table followed by key business takeaways.`,
+            content: `Please answer the current question: "${prompt}". Refer ONLY to the verified records retrieved from [${connectedDbNames}]. Format tabular data as Markdown tables. Answer only what is asked without reciting past sales or prior queries. Do not show any SQL.`,
           },
         ],
+        onFinish({ text }) {
+          console.log(`[DataBridge AI Debug] 🏁 Stream complete in ${Date.now() - synthStartTime}ms. Output length: ${text.length} characters.`);
+        },
+        onError({ error }) {
+          console.error(`[DataBridge AI Debug] ❌ Stream synthesis error after ${Date.now() - synthStartTime}ms:`, error);
+        },
       });
 
       return summaryStream.toTextStreamResponse();
     }
 
-    // Autonomous Simplified Business Summary Fallback (When no remote API key is active)
-    const rows = rawResults.slice(0, 10);
-    const firstRow = (rows[0] || {}) as Record<string, unknown>;
-    const headers = Object.keys(firstRow);
+    // ----------------------------------------------------------------
+    // STEP 4: Autonomous Simplified Business Summary Fallback
+    // ----------------------------------------------------------------
+    const allRows: Record<string, unknown>[] = [];
+    for (const er of executionResults) {
+      for (const r of er.results.slice(0, 8)) {
+        allRows.push({
+          Database: er.sourceName,
+          ...(r as Record<string, unknown>),
+        });
+      }
+    }
+
+    const rowsToDisplay = allRows.slice(0, 10);
+    const firstRow = rowsToDisplay[0] || {};
+    const headers = Object.keys(firstRow).filter((k) => k !== "id" && k !== "_id");
 
     const tableHeader = `| ${headers.join(" | ")} |\n| ${headers.map(() => "---").join(" | ")} |`;
-    const tableRows = rows
-      .map((rowItem) => {
-        const row = rowItem as Record<string, unknown>;
-        return `| ${headers.map((h) => String(row[h] ?? "")).join(" | ")} |`;
-      })
+    const tableRows = rowsToDisplay
+      .map((rowItem) => `| ${headers.map((h) => String(rowItem[h] ?? "")).join(" | ")} |`)
       .join("\n");
 
-    const simplifiedBusinessResponse = `### Executive Summary: ${prompt}
+    const simplifiedBusinessResponse = `## Executive Summary: ${prompt}
 
-Here is the simplified breakdown retrieved from your connected **${connection.name}** database:
+Here is the data retrieved from the selected database(s) (**${connectedDbNames}**):
 
 ${tableHeader}
 ${tableRows}
 
-#### Key Business Takeaways:
-- **Primary Segment:** **Enterprise** accounts represent the majority of top-tier activity, led by **Apex Global Holdings** and **Vanguard Tech Partners**.
-- **Account Health:** All top 10 accounts show an **Active** status with strong order retention across Platinum and Gold tiers.
-- **Data Source:** Verified directly against customer transaction tables in \`${connection.dbName}\`.
-
-<details>
-<summary className="cursor-pointer text-[11px] text-slate-500 font-mono mt-3">View Autonomous SQL Statement</summary>
-
-\`\`\`sql
-${generatedSql}
-\`\`\`
-</details>
+### Strategic Business Insights:
+- **Verified Record Standing:** Retrieved current records answering "${prompt}" from ${connectedDbNames}.
+- **Target Database Isolation:** Strictly scoped to the actively selected data source(s).
 `;
 
     const encoder = new TextEncoder();

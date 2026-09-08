@@ -2,6 +2,7 @@ import { auth } from "@/auth";
 import { redirect } from "next/navigation";
 import Sidebar from "@/components/sidebar";
 import Header from "@/components/header";
+import { QuerySessionProvider } from "@/lib/query-session-context";
 
 interface DashboardShellProps {
   children: React.ReactNode;
@@ -24,14 +25,16 @@ export default async function DashboardShell({ children }: DashboardShellProps) 
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[#090d16]">
-      <Sidebar user={user} />
-      <div className="flex flex-col flex-1 min-w-0 h-screen overflow-hidden">
-        <Header user={user} />
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
-          {children}
-        </main>
+    <QuerySessionProvider userId={session.user.id} orgId={user.orgId}>
+      <div className="flex h-screen w-screen overflow-hidden bg-[#090d16]">
+        <Sidebar user={user} />
+        <div className="flex flex-col flex-1 min-w-0 h-screen overflow-hidden">
+          <Header user={user} />
+          <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
+            {children}
+          </main>
+        </div>
       </div>
-    </div>
+    </QuerySessionProvider>
   );
 }
