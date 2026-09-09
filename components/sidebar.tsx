@@ -89,16 +89,33 @@ export default function Sidebar({ user }: SidebarProps) {
       <div className="p-3 border-b border-white/5 space-y-1">
         <Link
           href="/"
-          className="w-full flex items-center gap-2.5 p-2 rounded-xl bg-white/[0.03] hover:bg-white/[0.07] border border-white/5 text-slate-200 text-xs font-medium transition-all"
+          className="w-full flex items-center gap-2.5 p-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/5 text-slate-200 text-xs font-medium transition-all group"
+          title="AI Query Space (Chat Screen)"
         >
-          <Terminal className="w-4 h-4 text-indigo-400 shrink-0" />
-          {!isCollapsed && <span>Dashboard & Query</span>}
+          <Sparkles className="w-4 h-4 text-indigo-400 shrink-0 group-hover:scale-110 transition-transform" />
+          {!isCollapsed && (
+            <div className="flex items-center justify-between flex-1">
+              <span>AI Query Space</span>
+              <span className="text-[9px] font-mono text-indigo-300 bg-indigo-500/10 px-1.5 py-0.5 rounded border border-indigo-500/20">
+                Chat
+              </span>
+            </div>
+          )}
+        </Link>
+        <Link
+          href="/management"
+          className="w-full flex items-center gap-2.5 p-2 rounded-xl hover:bg-white/[0.05] text-slate-300 hover:text-white text-xs font-medium transition-all group"
+          title="Overview & Management (Cards & Sources)"
+        >
+          <Terminal className="w-4 h-4 text-blue-400 shrink-0 group-hover:scale-110 transition-transform" />
+          {!isCollapsed && <span>Overview &amp; Sources</span>}
         </Link>
         <Link
           href="/settings/connections"
-          className="w-full flex items-center gap-2.5 p-2 rounded-xl hover:bg-white/[0.05] text-slate-300 hover:text-white text-xs font-medium transition-all"
+          className="w-full flex items-center gap-2.5 p-2 rounded-xl hover:bg-white/[0.05] text-slate-300 hover:text-white text-xs font-medium transition-all group"
+          title="Manage Databases"
         >
-          <Database className="w-4 h-4 text-emerald-400 shrink-0" />
+          <Database className="w-4 h-4 text-emerald-400 shrink-0 group-hover:scale-110 transition-transform" />
           {!isCollapsed && (
             <div className="flex items-center justify-between flex-1">
               <span>Databases</span>
