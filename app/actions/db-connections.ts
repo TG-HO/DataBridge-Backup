@@ -7,6 +7,7 @@ import { revalidatePath } from "next/cache";
 import sql from "mssql";
 import mysql, { RowDataPacket } from "mysql2/promise";
 import { Client as PgClient } from "pg";
+import { createConnectedPgClient } from "@/lib/pg-client";
 import { MongoClient } from "mongodb";
 import { initializeApp, cert, getApps, getApp, App as FirebaseApp } from "firebase-admin/app";
 import { getFirestore, DocumentData, QueryDocumentSnapshot } from "firebase-admin/firestore";
@@ -312,59 +313,103 @@ export async function syncDatabaseSchema(
     }
 
     // -------------------------------------------------------------
-    // 2. PostgreSQL & Supabase Schema Extraction
+    // 2. PostgreSQL & Supabase Schema Extraction (Dual-Strategy: information_schema + pg_catalog)
     // -------------------------------------------------------------
     else if (dbType === "postgres" || dbType === "postgresql" || dbType === "supabase") {
       let pgClient: PgClient | null = null;
       try {
-        const isSupabase = conn.host.includes("supabase.co") || conn.port === 6543 || conn.port === 5432;
-        pgClient = new PgClient({
+        pgClient = await createConnectedPgClient({
           host: conn.host,
-          port: Number(conn.port) || 5432,
+          port: conn.port,
           database: conn.dbName,
           user: conn.username,
           password: plainPassword,
-          ssl: isSupabase ? { rejectUnauthorized: false } : false,
-          connectionTimeoutMillis: 8000,
+          timeoutMillis: 8000,
         });
 
-        await pgClient.connect();
+        let columnRows: SchemaColumnRow[] = [];
 
-        const queryRes = await pgClient.query(`
-          SELECT 
-            table_schema AS "tableSchema",
-            table_name AS "tableName",
-            column_name AS "columnName",
-            data_type AS "dataType",
-            character_maximum_length AS "maxLength",
-            is_nullable AS "isNullable"
-          FROM information_schema.columns
-          WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
-          ORDER BY table_schema, table_name, ordinal_position;
-        `);
+        // Strategy 1: information_schema.columns
+        try {
+          const queryRes = await pgClient.query(`
+            SELECT 
+              table_schema AS "tableSchema",
+              table_name AS "tableName",
+              column_name AS "columnName",
+              data_type AS "dataType",
+              character_maximum_length AS "maxLength",
+              is_nullable AS "isNullable"
+            FROM information_schema.columns
+            WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
+            ORDER BY table_schema, table_name, ordinal_position;
+          `);
 
-        if (queryRes.rows && queryRes.rows.length > 0) {
-          const columnRows: SchemaColumnRow[] = queryRes.rows.map((r) => ({
-            tableSchema: String(r.tableSchema || "public"),
-            tableName: String(r.tableName),
-            columnName: String(r.columnName),
-            dataType: String(r.dataType),
-            maxLength: r.maxLength ? Number(r.maxLength) : null,
-            isNullable: r.isNullable === "YES" ? "YES" : "NO",
-          }));
+          if (queryRes.rows && queryRes.rows.length > 0) {
+            columnRows = queryRes.rows.map((r) => ({
+              tableSchema: String(r.tableSchema || "public"),
+              tableName: String(r.tableName),
+              columnName: String(r.columnName),
+              dataType: String(r.dataType),
+              maxLength: r.maxLength ? Number(r.maxLength) : null,
+              isNullable: r.isNullable === "YES" ? "YES" : "NO",
+            }));
+          }
+        } catch (infoErr) {
+          console.warn("[syncDatabaseSchema] information_schema query notice, trying pg_catalog:", infoErr);
+        }
+
+        // Strategy 2: pg_catalog fallback (critical for read-only roles without explicit table ownership)
+        if (columnRows.length === 0) {
+          try {
+            const catalogRes = await pgClient.query(`
+              SELECT 
+                n.nspname AS "tableSchema",
+                c.relname AS "tableName",
+                a.attname AS "columnName",
+                pg_catalog.format_type(a.atttypid, a.atttypmod) AS "dataType",
+                CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS "isNullable"
+              FROM pg_catalog.pg_class c
+              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+              JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid
+              WHERE c.relkind IN ('r', 'v', 'm', 'p')
+                AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+                AND a.attnum > 0
+                AND NOT a.attisdropped
+              ORDER BY n.nspname, c.relname, a.attnum;
+            `);
+
+            if (catalogRes.rows && catalogRes.rows.length > 0) {
+              columnRows = catalogRes.rows.map((r) => ({
+                tableSchema: String(r.tableSchema || "public"),
+                tableName: String(r.tableName),
+                columnName: String(r.columnName),
+                dataType: String(r.dataType),
+                maxLength: null,
+                isNullable: r.isNullable === "YES" ? "YES" : "NO",
+              }));
+            }
+          } catch (catErr) {
+            console.warn("[syncDatabaseSchema] pg_catalog query notice:", catErr);
+          }
+        }
+
+        if (columnRows.length > 0) {
           markdownSchema = formatSchemaToMarkdown(columnRows, conn.dbName);
           const uniqueTables = new Set(columnRows.map((r) => `${r.tableSchema}.${r.tableName}`));
           tableCount = uniqueTables.size;
+          isFallback = false;
         } else {
-          markdownSchema = getFallbackSchemaContext(conn.dbName, "public");
-          tableCount = 5;
-          isFallback = true;
+          markdownSchema = `## Database Schema Context: [${conn.dbName}] (POSTGRESQL)\n*(No user tables or views detected in this database)*`;
+          tableCount = 0;
+          isFallback = false;
         }
-      } catch (pgError) {
-        console.warn(`[syncDatabaseSchema] Postgres extraction notice:`, pgError);
-        markdownSchema = getFallbackSchemaContext(conn.dbName, "public");
-        tableCount = 5;
-        isFallback = true;
+      } catch (pgError: unknown) {
+        const errorMsg = pgError instanceof Error ? pgError.message : String(pgError);
+        console.error(`[syncDatabaseSchema] Postgres extraction error for ${conn.name}:`, errorMsg);
+        return {
+          success: false,
+          error: `PostgreSQL connection/extraction failed: ${errorMsg}`,
+        };
       } finally {
         if (pgClient) {
           try { await pgClient.end(); } catch {}
@@ -646,17 +691,14 @@ export async function testDbConnection(
     else if (dbType === "postgres" || dbType === "postgresql" || dbType === "supabase") {
       let pgClient: PgClient | null = null;
       try {
-        const isSupabase = conn.host.includes("supabase.co") || conn.port === 6543 || conn.port === 5432;
-        pgClient = new PgClient({
+        pgClient = await createConnectedPgClient({
           host: conn.host,
-          port: Number(conn.port) || 5432,
+          port: conn.port,
           database: conn.dbName,
           user: conn.username,
           password: plainPassword,
-          ssl: isSupabase ? { rejectUnauthorized: false } : false,
-          connectionTimeoutMillis: 5000,
+          timeoutMillis: 5000,
         });
-        await pgClient.connect();
         await pgClient.query("SELECT 1 AS alive");
       } finally {
         if (pgClient) {
@@ -738,13 +780,12 @@ export async function testDbConnection(
       message: `Connected successfully to ${conn.name} [${conn.dbType.toUpperCase()}] (${latencyMs}ms)`,
       data: { latencyMs, status: "Connected" },
     };
-  } catch (error) {
-    const fallbackLatency = Math.floor(Math.random() * 25) + 12;
-    console.warn("[testDbConnection] Connection test warning:", error);
+  } catch (error: unknown) {
+    const errorMsg = error instanceof Error ? error.message : "Database connection handshake failed";
+    console.error("[testDbConnection] Connection test failure:", errorMsg);
     return {
-      success: true,
-      message: `Verified credentials & structure (${fallbackLatency}ms)`,
-      data: { latencyMs: fallbackLatency, status: "Connected" },
+      success: false,
+      error: errorMsg,
     };
   }
 }

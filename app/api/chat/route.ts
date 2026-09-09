@@ -7,6 +7,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import sql from "mssql";
 import mysql, { RowDataPacket } from "mysql2/promise";
 import { Client as PgClient } from "pg";
+import { createConnectedPgClient } from "@/lib/pg-client";
 import { MongoClient } from "mongodb";
 import { initializeApp, cert, getApps, App as FirebaseApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
@@ -443,20 +444,18 @@ async function executeDatabaseQuery(
   if (dbType === "postgres" || dbType === "postgresql" || dbType === "supabase") {
     let pgClient: PgClient | null = null;
     try {
-      const isSupabase = conn.host.includes("supabase.co") || conn.port === 6543 || conn.port === 5432;
-      pgClient = new PgClient({
+      pgClient = await createConnectedPgClient({
         host: conn.host,
-        port: Number(conn.port) || 5432,
+        port: conn.port,
         database: conn.dbName,
         user: conn.username,
         password: plainPassword,
-        ssl: isSupabase ? { rejectUnauthorized: false } : false,
-        connectionTimeoutMillis: 8000,
+        timeoutMillis: 8000,
       });
 
-      await pgClient.connect();
       const res = await pgClient.query(query);
       const rows = res.rows || [];
+      const isSupabase = conn.host.includes("supabase.co") || conn.host.includes("pooler.supabase.com");
       return {
         sourceName: conn.name,
         dbType: isSupabase ? "Supabase (PostgreSQL)" : "PostgreSQL",
