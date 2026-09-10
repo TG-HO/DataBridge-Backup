@@ -9,8 +9,7 @@ import mysql, { RowDataPacket } from "mysql2/promise";
 import { Client as PgClient } from "pg";
 import { createConnectedPgClient } from "@/lib/pg-client";
 import { MongoClient } from "mongodb";
-import { initializeApp, cert, getApps, App as FirebaseApp } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
+import { getOrCreateFirebaseFirestore } from "@/lib/firebase-server";
 
 export const dynamic = "force-dynamic";
 
@@ -825,26 +824,16 @@ async function executeDatabaseQuery(
   // 4. Firebase Firestore Execution
   if (dbType === "firebase" || dbType === "firestore") {
     try {
-      const appName = `run-fb-${conn.id}`;
-      let fbApp: FirebaseApp;
-      const existingApps = getApps();
-      const found = existingApps.find((a) => a.name === appName);
-      if (found) {
-        fbApp = found;
-      } else {
-        let credentialOptions = undefined;
-        if (plainPassword.trim().startsWith("{")) {
-          try {
-            const serviceAccount = JSON.parse(plainPassword);
-            credentialOptions = cert(serviceAccount);
-          } catch {}
-        }
-        fbApp = initializeApp(
-          { credential: credentialOptions, projectId: conn.host.trim() || conn.dbName.trim() },
-          appName
-        );
-      }
-      const firestore = getFirestore(fbApp);
+      const firestore = await getOrCreateFirebaseFirestore(
+        {
+          id: conn.id,
+          host: conn.host,
+          dbName: conn.dbName,
+          username: conn.username,
+          plainPassword,
+        },
+        "run-fb"
+      );
       const defaultCol = findRelevantTable(conn.schemaContext, prompt);
       const spec = parseFirestoreQuery(query, defaultCol);
       const collName = spec.collection || defaultCol;

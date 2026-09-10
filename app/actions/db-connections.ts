@@ -9,8 +9,8 @@ import mysql, { RowDataPacket } from "mysql2/promise";
 import { Client as PgClient } from "pg";
 import { createConnectedPgClient } from "@/lib/pg-client";
 import { MongoClient } from "mongodb";
-import { initializeApp, cert, getApps, getApp, App as FirebaseApp } from "firebase-admin/app";
-import { getFirestore, DocumentData, QueryDocumentSnapshot } from "firebase-admin/firestore";
+import { DocumentData, QueryDocumentSnapshot } from "firebase-admin/firestore";
+import { getOrCreateFirebaseFirestore } from "@/lib/firebase-server";
 
 export interface CreateDbConnectionInput {
   orgId: string;
@@ -481,34 +481,17 @@ export async function syncDatabaseSchema(
     // -------------------------------------------------------------
     else if (dbType === "firebase" || dbType === "firestore") {
       try {
-        const appName = `firebase-${conn.id}`;
-        let fbApp: FirebaseApp;
-
-        const existingApps = getApps();
-        const found = existingApps.find((a) => a.name === appName);
-        if (found) {
-          fbApp = found;
-        } else {
-          let credentialOptions = undefined;
-          if (plainPassword.trim().startsWith("{")) {
-            try {
-              const serviceAccount = JSON.parse(plainPassword);
-              credentialOptions = cert(serviceAccount);
-            } catch {
-              // fallback
-            }
-          }
-
-          fbApp = initializeApp(
-            {
-              credential: credentialOptions,
-              projectId: conn.host.trim() || conn.dbName.trim(),
-            },
-            appName
-          );
-        }
-
-        const firestore = getFirestore(fbApp);
+        const firestore = await getOrCreateFirebaseFirestore(
+          {
+            id: conn.id,
+            host: conn.host,
+            dbName: conn.dbName,
+            username: conn.username,
+            plainPassword,
+            forceRefresh: true,
+          },
+          "sync-fb"
+        );
         const rootCollections = await firestore.listCollections();
 
         const discovered: { name: string; fields: Record<string, string> }[] = [];
@@ -727,28 +710,17 @@ export async function testDbConnection(
     }
     // 4. Firebase test
     else if (dbType === "firebase" || dbType === "firestore") {
-      const appName = `test-fb-${conn.id}`;
-      let fbApp: FirebaseApp;
-      const existingApps = getApps();
-      const found = existingApps.find((a) => a.name === appName);
-      if (found) {
-        fbApp = found;
-      } else {
-        let credentialOptions = undefined;
-        if (plainPassword.trim().startsWith("{")) {
-          try {
-            const serviceAccount = JSON.parse(plainPassword);
-            credentialOptions = cert(serviceAccount);
-          } catch {
-            // fallback
-          }
-        }
-        fbApp = initializeApp(
-          { credential: credentialOptions, projectId: conn.host.trim() || conn.dbName.trim() },
-          appName
-        );
-      }
-      const firestore = getFirestore(fbApp);
+      const firestore = await getOrCreateFirebaseFirestore(
+        {
+          id: conn.id,
+          host: conn.host,
+          dbName: conn.dbName,
+          username: conn.username,
+          plainPassword,
+          forceRefresh: true,
+        },
+        "test-fb"
+      );
       await firestore.listCollections();
     }
     // 5. MSSQL test

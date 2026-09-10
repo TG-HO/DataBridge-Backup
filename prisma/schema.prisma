@@ -99,7 +99,7 @@ model DbConnection {
   port              Int
   dbName            String
   username          String
-  encryptedPassword String
+  encryptedPassword String   @db.NVarChar(Max)
   schemaContext     String?  @db.Text
   createdAt         DateTime @default(now())
 
