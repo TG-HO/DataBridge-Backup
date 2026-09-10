@@ -146,6 +146,25 @@ function isSafeReadOnlyQuery(query: string): boolean {
 }
 
 /**
+ * Validates that the generated NoSQL query specification is strictly read-only
+ */
+function isSafeReadOnlyNoSqlQuery(raw: string): boolean {
+  if (!raw) return false;
+  const upper = raw.toUpperCase();
+  const destructive = [
+    "DELETE", "DROP", "UPDATE", "INSERT", "REMOVE",
+    "$OUT", "$MERGE", "CREATETABLE", "ALTER", "TRUNCATE"
+  ];
+  for (const d of destructive) {
+    const regex = new RegExp(`(^|[^a-zA-Z0-9_])${d.replace("$", "\\$")}([^a-zA-Z0-9_]|$)`, "i");
+    if (regex.test(upper)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
  * Robustly extracts and sanitizes executable SQL queries from LLM output.
  * Handles markdown code fences, conversational preamble, thinking tags, and trailing notes.
  */
@@ -171,66 +190,242 @@ function cleanQueryString(raw: string): string {
 }
 
 /**
- * Finds the most relevant table name from schema context based on prompt keywords.
- * Avoids picking internal telemetry or audit tables.
+ * Cleans and extracts JSON payload for NoSQL queries (MongoDB / Firestore).
  */
-function findRelevantTable(schemaContext?: string | null, prompt: string = ""): string {
-  if (!schemaContext) return "customers";
-  const lower = prompt.toLowerCase();
+function cleanNoSqlQueryString(raw: string): string {
+  if (!raw) return "{}";
+  let text = raw.trim();
+  const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (jsonMatch && jsonMatch[1]) {
+    text = jsonMatch[1].trim();
+  }
+  const firstBrace = text.indexOf("{");
+  const lastBrace = text.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    return text.substring(firstBrace, lastBrace + 1);
+  }
+  return text;
+}
 
-  const matches = [...schemaContext.matchAll(/- \*\*([^*]+)\*\*/g)].map((m) => m[1].trim());
-  if (matches.length === 0) return "customers";
+interface MongoQuerySpec {
+  collection: string;
+  filter?: Record<string, unknown>;
+  sort?: Record<string, 1 | -1>;
+  limit?: number;
+  projection?: Record<string, 0 | 1>;
+  pipeline?: Record<string, unknown>[];
+}
 
-  if (lower.includes("sale") || lower.includes("revenue") || lower.includes("spent") || lower.includes("pay")) {
-    const saleTable = matches.find(
-      (t) =>
-        t.toLowerCase().includes("sale") ||
-        t.toLowerCase().includes("order") ||
-        t.toLowerCase().includes("invoice") ||
-        t.toLowerCase().includes("payment")
-    );
-    if (saleTable) return saleTable.split(".").pop() || saleTable;
+function parseMongoQuery(raw: string, defaultCollection: string): MongoQuerySpec {
+  const cleaned = cleanNoSqlQueryString(raw);
+  try {
+    const parsed = JSON.parse(cleaned);
+    if (parsed && typeof parsed === "object") {
+      return {
+        collection: parsed.collection || defaultCollection,
+        filter: parsed.filter || (parsed.pipeline ? undefined : {}),
+        sort: parsed.sort || {},
+        limit: typeof parsed.limit === "number" ? parsed.limit : 15,
+        projection: parsed.projection,
+        pipeline: Array.isArray(parsed.pipeline) ? parsed.pipeline : undefined,
+      };
+    }
+  } catch {}
+
+  // MQL regex fallback: db.movies.find({ ... }) or db.movies.aggregate([ ... ])
+  const mqlMatch = raw.match(/db\.([a-zA-Z0-9_-]+)\.(find|aggregate)\(([\s\S]*)\)/);
+  if (mqlMatch) {
+    const coll = mqlMatch[1];
+    const op = mqlMatch[2];
+    const argStr = mqlMatch[3].trim();
+    if (op === "aggregate") {
+      try {
+        const pipeline = JSON.parse(argStr.replace(/;\s*$/, ""));
+        return { collection: coll, pipeline };
+      } catch {}
+    } else {
+      try {
+        const filter = JSON.parse(argStr.replace(/;\s*$/, ""));
+        return { collection: coll, filter, limit: 15 };
+      } catch {}
+    }
+    return { collection: coll, filter: {}, limit: 15 };
   }
 
-  if (lower.includes("customer") || lower.includes("client") || lower.includes("user")) {
-    const custTable = matches.find(
-      (t) =>
-        t.toLowerCase().includes("customer") ||
-        t.toLowerCase().includes("client") ||
-        t.toLowerCase().includes("user")
-    );
-    if (custTable) return custTable.split(".").pop() || custTable;
-  }
+  return { collection: defaultCollection, filter: {}, limit: 15 };
+}
 
-  // Avoid audit_logs or internal telemetry tables if business tables exist
-  const businessTable = matches.find(
-    (t) =>
-      !t.toLowerCase().includes("audit") &&
-      !t.toLowerCase().includes("log") &&
-      !t.toLowerCase().includes("connection") &&
-      !t.toLowerCase().includes("telemetry")
-  );
+interface FirestoreQuerySpec {
+  collection: string;
+  where?: Array<[string, string, unknown]>;
+  orderBy?: string;
+  orderDirection?: "asc" | "desc";
+  limit?: number;
+}
 
-  const selected = businessTable || matches[0];
-  return selected.split(".").pop() || selected;
+function parseFirestoreQuery(raw: string, defaultCollection: string): FirestoreQuerySpec {
+  const cleaned = cleanNoSqlQueryString(raw);
+  try {
+    const parsed = JSON.parse(cleaned);
+    if (parsed && typeof parsed === "object") {
+      return {
+        collection: parsed.collection || defaultCollection,
+        where: Array.isArray(parsed.where) ? parsed.where : [],
+        orderBy: typeof parsed.orderBy === "string" ? parsed.orderBy : undefined,
+        orderDirection: parsed.orderDirection === "desc" ? "desc" : "asc",
+        limit: typeof parsed.limit === "number" ? parsed.limit : 15,
+      };
+    }
+  } catch {}
+
+  return { collection: defaultCollection, limit: 15 };
 }
 
 /**
- * Generates an infallible schema-based fallback query using SELECT *
- * so it can never fail with "Unknown column".
+ * Serializes BSON types (ObjectId, Date, Decimal128) and cleans large embeddings.
+ */
+function serializeBsonDoc(val: unknown): unknown {
+  if (val === null || val === undefined) return val;
+  if (typeof val !== "object") return val;
+
+  if (val instanceof Date) {
+    return val.toISOString().split("T")[0];
+  }
+
+  if (typeof (val as { toHexString?: () => string }).toHexString === "function") {
+    return (val as { toHexString: () => string }).toHexString();
+  }
+
+  if (
+    typeof (val as { toString?: () => string }).toString === "function" &&
+    val.constructor?.name !== "Object" &&
+    !Array.isArray(val)
+  ) {
+    const s = String(val);
+    if (s !== "[object Object]") return s;
+  }
+
+  if (Array.isArray(val)) {
+    return val.slice(0, 8).map(serializeBsonDoc);
+  }
+
+  const res: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
+    if (k.toLowerCase().includes("embedding")) continue;
+    res[k] = serializeBsonDoc(v);
+  }
+  return res;
+}
+
+/**
+ * Serializes Firestore documents and Timestamps to clean JSON.
+ */
+function serializeFirestoreDoc(val: unknown): unknown {
+  if (val === null || val === undefined) return val;
+  if (typeof val !== "object") return val;
+
+  if (typeof (val as { toDate?: () => Date }).toDate === "function") {
+    return (val as { toDate: () => Date }).toDate().toISOString().split("T")[0];
+  }
+
+  if (Array.isArray(val)) {
+    return val.slice(0, 8).map(serializeFirestoreDoc);
+  }
+
+  const res: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
+    res[k] = serializeFirestoreDoc(v);
+  }
+  return res;
+}
+
+/**
+ * Finds the most relevant table or collection name from schema context based on prompt keywords.
+ * Avoids picking internal telemetry or audit tables.
+ */
+function findRelevantTable(schemaContext?: string | null, prompt: string = ""): string {
+  if (!schemaContext) return "default";
+  const lower = prompt.toLowerCase();
+
+  const rawMatches = [...schemaContext.matchAll(/- \*\*([^*]+)\*\*/g)].map((m) => m[1].trim());
+  if (rawMatches.length === 0) return "default";
+
+  const tables = rawMatches.map((t) => {
+    const clean = t.split(".").pop() || t;
+    return { full: t, clean };
+  });
+
+  const promptWords = lower.replace(/[^\w\s]/g, " ").split(/\s+/).filter((w) => w.length > 2);
+
+  let bestMatch: string | null = null;
+  let bestScore = -1;
+
+  for (const t of tables) {
+    const nameLower = t.clean.toLowerCase();
+    let score = 0;
+
+    if (lower.includes(nameLower)) score += 10;
+
+    for (const pw of promptWords) {
+      if (nameLower.includes(pw) || pw.includes(nameLower)) score += 5;
+    }
+
+    if (
+      (lower.includes("sale") || lower.includes("revenue") || lower.includes("order") || lower.includes("spent") || lower.includes("pay")) &&
+      (nameLower.includes("sale") || nameLower.includes("order") || nameLower.includes("invoice") || nameLower.includes("payment"))
+    ) {
+      score += 8;
+    }
+
+    if (
+      (lower.includes("customer") || lower.includes("client") || lower.includes("user") || lower.includes("account")) &&
+      (nameLower.includes("customer") || nameLower.includes("client") || nameLower.includes("user"))
+    ) {
+      score += 8;
+    }
+
+    if (nameLower.includes("audit") || nameLower.includes("log") || nameLower.includes("telemetry") || nameLower.includes("session")) {
+      score -= 3;
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = t.clean;
+    }
+  }
+
+  if (bestMatch && bestScore > 0) return bestMatch;
+
+  const businessTable = tables.find(
+    (t) =>
+      !t.clean.toLowerCase().includes("audit") &&
+      !t.clean.toLowerCase().includes("log") &&
+      !t.clean.toLowerCase().includes("telemetry")
+  );
+
+  return businessTable?.clean || tables[0].clean;
+}
+
+/**
+ * Generates an infallible schema-based fallback query using SELECT * or JSON spec.
  */
 function getSafeFallbackQuery(
   conn: { dbType: string; schemaContext?: string | null },
   prompt: string = ""
 ): string {
   const table = findRelevantTable(conn.schemaContext, prompt);
-  const isMy = conn.dbType.toLowerCase() === "mysql";
-  const isPg = conn.dbType.toLowerCase() === "postgres" || conn.dbType.toLowerCase() === "supabase";
+  const type = conn.dbType.toLowerCase();
 
-  if (isMy) {
+  if (type === "mongodb") {
+    return JSON.stringify({ collection: table, filter: {}, limit: 15 });
+  }
+  if (type === "firebase" || type === "firestore") {
+    return JSON.stringify({ collection: table, limit: 15 });
+  }
+  if (type === "mysql") {
     return `SELECT * FROM \`${table}\` LIMIT 10;`;
   }
-  if (isPg) {
+  if (type === "postgres" || type === "postgresql" || type === "supabase") {
     return `SELECT * FROM "${table}" LIMIT 10;`;
   }
   return `SELECT TOP (10) * FROM dbo.[${table}];`;
@@ -270,33 +465,77 @@ async function generateQueryForSingleDatabase(
   modelInfo: ReturnType<typeof getLanguageModel>,
   recentContext?: string
 ): Promise<string> {
-  const isMy = conn.dbType.toLowerCase() === "mysql";
-  const isMSSQL = conn.dbType.toLowerCase() === "mssql";
-  const isPg = conn.dbType.toLowerCase() === "postgres" || conn.dbType.toLowerCase() === "supabase";
+  const dbType = conn.dbType.toLowerCase();
+  const isMy = dbType === "mysql";
+  const isMSSQL = dbType === "mssql";
+  const isPg = dbType === "postgres" || dbType === "postgresql" || dbType === "supabase";
+  const isMongo = dbType === "mongodb";
+  const isFirebase = dbType === "firebase" || dbType === "firestore";
+  const isNoSql = isMongo || isFirebase;
 
-  const dialectGuidelines = isMSSQL
-    ? `TARGET DATABASE ENGINE: Microsoft SQL Server (T-SQL)
+  const collectionsList = conn.schemaContext
+    ? [...conn.schemaContext.matchAll(/- \*\*([^*]+)\*\*/g)].map((m) => m[1].split(".").pop() || m[1]).join(", ")
+    : "collections in database";
+
+  let dialectGuidelines = "";
+  let enginePromptInstruction = "";
+
+  if (isMSSQL) {
+    dialectGuidelines = `TARGET DATABASE ENGINE: Microsoft SQL Server (T-SQL)
 SYNTAX & DIALECT MANDATES:
 1. Enclose all table and column names in square brackets: dbo.[TableName], [ColumnName].
-2. For top N records, strictly use "SELECT TOP (N)" at the beginning of the SELECT clause — NEVER use "LIMIT", which will cause a syntax error in MSSQL!
-3. CRITICAL JOIN RULE: Whenever joining multiple tables (e.g. dbo.[customers] c LEFT JOIN dbo.[invoices] i ON c.[customer_id] = i.[customer_id]), ALWAYS prefix every column name with its table alias (e.g. c.[customer_id], i.[total_amount]). NEVER reference a bare [customer_id] which will cause an 'Ambiguous column name' error!
-4. Strictly use ONLY the tables and columns present in the schema metadata below.`
-    : isMy
-    ? `TARGET DATABASE ENGINE: MySQL
+2. For top N records, strictly use "SELECT TOP (N)" at the beginning of the SELECT clause — NEVER use "LIMIT"!
+3. CRITICAL JOIN RULE: Whenever joining multiple tables (e.g. dbo.[customers] c LEFT JOIN dbo.[invoices] i ON c.[customer_id] = i.[customer_id]), ALWAYS prefix every column name with its table alias (e.g. c.[customer_id], i.[total_amount]). NEVER reference a bare [customer_id]!
+4. Strictly use ONLY the tables and columns present in the schema metadata below.`;
+    enginePromptInstruction = "Write the exact read-only SQL query for this MSSQL database to answer the request. Return ONLY the raw SQL query.";
+  } else if (isMy) {
+    dialectGuidelines = `TARGET DATABASE ENGINE: MySQL
 SYNTAX & DIALECT MANDATES:
 1. Enclose all table and column names in backticks: \`table_name\`, \`column_name\`.
 2. For top N records, strictly use "LIMIT N" at the end of the query — NEVER use "TOP (N)"!
-3. CRITICAL JOIN RULE: Whenever joining multiple tables (e.g. \`customers\` c LEFT JOIN \`sales\` s ON c.\`customer_id\` = s.\`customer_id\`), ALWAYS prefix every column name with its table alias (e.g. c.\`customer_id\`, s.\`total_amount\`). NEVER reference a bare \`customer_id\` which will cause a 'Column is ambiguous' error!
-4. Strictly use ONLY the tables and columns present in the schema metadata below. (Note: in MySQL customers, column is \`full_name\`, not customer_name).`
-    : isPg
-    ? `TARGET DATABASE ENGINE: PostgreSQL / Supabase
+3. CRITICAL JOIN RULE: Whenever joining multiple tables, ALWAYS prefix every column name with its table alias (e.g. c.\`customer_id\`).
+4. Strictly use ONLY the tables and columns present in the schema metadata below.`;
+    enginePromptInstruction = "Write the exact read-only SQL query for this MySQL database to answer the request. Return ONLY the raw SQL query.";
+  } else if (isPg) {
+    dialectGuidelines = `TARGET DATABASE ENGINE: PostgreSQL / Supabase
 SYNTAX & DIALECT MANDATES:
 1. Use standard SQL or double quotes: "table_name", "column_name". Use "LIMIT N".
-2. Qualify all column names in joins (e.g. c.customer_id, o.total_amount).`
-    : `TARGET DATABASE ENGINE: ${conn.dbType.toUpperCase()}
-SYNTAX MANDATE: Return a valid read-only query for this engine.`;
+2. Qualify all column names in joins (e.g. c.customer_id, o.total_amount).`;
+    enginePromptInstruction = "Write the exact read-only SQL query for this PostgreSQL database to answer the request. Return ONLY the raw SQL query.";
+  } else if (isMongo) {
+    dialectGuidelines = `TARGET DATABASE ENGINE: MongoDB (NoSQL Document Store)
+MANDATORY FORMAT:
+Return a JSON query specification object with keys:
+- "collection": (string) Must be one of: [${collectionsList}]
+- "filter": (object) MongoDB filter conditions (e.g. {"year": {"$gte": 2000}, "genres": "Action"}). Use $regex for case-insensitive search if user asks for specific names/titles (e.g. {"title": {"$regex": "matrix", "$options": "i"}}).
+- "sort": (object) Optional sort fields (e.g. {"imdb.rating": -1} or {"year": -1}).
+- "limit": (number) Max records to retrieve (default: 15, max: 30).
+- "projection": (object) Optional fields to include (e.g. {"title": 1, "year": 1, "imdb": 1}).
+- "pipeline": (array) Optional aggregation pipeline if user asks for totals, counts, or grouping.
 
-  const contextNote = recentContext ? `\nRecent Conversation Context (use strictly to resolve pronouns like 'this customer', 'that order'):\n${recentContext}\n` : "";
+DO NOT write SQL or SELECT statements! MongoDB does not accept SQL. Return ONLY the JSON object.`;
+    enginePromptInstruction = "Write the exact read-only MongoDB query specification in JSON format to answer the request. Return ONLY the JSON object.";
+  } else if (isFirebase) {
+    dialectGuidelines = `TARGET DATABASE ENGINE: Firebase Firestore (NoSQL Document Store)
+MANDATORY FORMAT:
+Return a JSON query specification object with keys:
+- "collection": (string) Must be one of: [${collectionsList}]
+- "where": (array of 3-element tuples) Optional filter conditions, e.g.: [["status", "==", "active"], ["amount", ">=", 100]]. Supported operators: "==", "!=", "<", "<=", ">", ">=", "array-contains", "in".
+- "orderBy": (string) Optional field name to sort by.
+- "orderDirection": (string) "asc" or "desc".
+- "limit": (number) Max records (default: 15, max: 30).
+
+DO NOT write SQL or SELECT statements! Firebase Firestore does not accept SQL. Return ONLY the JSON object.`;
+    enginePromptInstruction = "Write the exact read-only Firestore query specification in JSON format to answer the request. Return ONLY the JSON object.";
+  } else {
+    dialectGuidelines = `TARGET DATABASE ENGINE: ${conn.dbType.toUpperCase()}
+Return a valid read-only query for this engine.`;
+    enginePromptInstruction = "Write the exact read-only query to answer the request.";
+  }
+
+  const contextNote = recentContext
+    ? `\nRecent Conversation Context (use strictly to resolve pronouns like 'this customer', 'that order', 'this movie'):\n${recentContext}\n`
+    : "";
 
   const systemPrompt = `${MASTER_ANALYST_SYSTEM_PROMPT}
 
@@ -306,39 +545,41 @@ Engine: ${conn.dbType.toUpperCase()}
 Database Scope: ${conn.dbName}
 
 ==================================================
-SCHEMA METADATA FOR THIS DATABASE:
+SCHEMA & COLLECTIONS FOR THIS DATABASE:
 ==================================================
 ${conn.schemaContext || "Schema metadata pending"}
 
 ${dialectGuidelines}
 ${contextNote}
-Read-Only Guarantee: Return strictly a read-only SELECT statement. Never write DROP, INSERT, UPDATE, DELETE, TRUNCATE, ALTER, or MERGE.
-Return ONLY the raw executable SQL query. Do NOT include markdown code fences (\`\`\`) or explanations.`;
+Read-Only Guarantee: Return strictly read-only retrieval logic. Never perform destructive or mutation commands.
+Return ONLY the raw executable ${isNoSql ? "JSON specification" : "SQL query"}. Do NOT include markdown explanations.`;
 
   if (modelInfo.isConfigured && modelInfo.model) {
     const tStart = Date.now();
-    console.log(`\n[DataBridge AI Debug] 🧠 Step 1: Asking ${modelInfo.providerName} (${modelInfo.modelName}) to write SQL for "${conn.name}" (${conn.dbType})...`);
+    console.log(`\n[DataBridge AI Debug] 🧠 Step 1: Asking ${modelInfo.providerName} (${modelInfo.modelName}) to formulate query for "${conn.name}" (${conn.dbType})...`);
     try {
       const res = await generateText({
         model: modelInfo.model,
         system: systemPrompt,
-        prompt: `Current User Request: "${prompt}"\nWrite the exact read-only SQL query for database "${conn.name}" to retrieve the specific data answering this request. Return ONLY the raw SQL query.`,
+        prompt: `Current User Request: "${prompt}"\n${enginePromptInstruction}`,
       });
 
       const tElapsed = Date.now() - tStart;
-      console.log(`[DataBridge AI Debug] ⏱️ AI SQL generation finished in ${tElapsed}ms for "${conn.name}".`);
+      console.log(`[DataBridge AI Debug] ⏱️ AI query formulation finished in ${tElapsed}ms for "${conn.name}".`);
 
-      const cleaned = cleanQueryString(res.text);
-      console.log(`[DataBridge AI Debug] 📝 Extracted SQL for "${conn.name}":\n   ${cleaned}`);
+      const cleaned = isNoSql ? cleanNoSqlQueryString(res.text) : cleanQueryString(res.text);
+      console.log(`[DataBridge AI Debug] 📝 Extracted query for "${conn.name}":\n   ${cleaned}`);
 
-      if (cleaned && isSafeReadOnlyQuery(cleaned)) {
+      const isSafe = isNoSql ? isSafeReadOnlyNoSqlQuery(cleaned) : isSafeReadOnlyQuery(cleaned);
+
+      if (cleaned && isSafe) {
         return cleaned;
       } else {
-        console.warn(`[DataBridge AI Debug] ⚠️ Query failed safe read-only validation. Using fallback.`);
+        console.warn(`[DataBridge AI Debug] ⚠️ Query failed safe read-only validation for "${conn.name}". Using fallback.`);
       }
     } catch (err) {
       const tElapsed = Date.now() - tStart;
-      console.error(`[DataBridge AI Debug] ❌ AI Model SQL Error for "${conn.name}" after ${tElapsed}ms:`, err);
+      console.error(`[DataBridge AI Debug] ❌ AI Model Query Error for "${conn.name}" after ${tElapsed}ms:`, err);
     }
   } else {
     console.log(`[DataBridge AI Debug] ℹ️ AI Model not configured (provider: ${modelInfo.providerName}). Using fallback query.`);
@@ -499,20 +740,76 @@ async function executeDatabaseQuery(
         uri = `mongodb://${authPart}${conn.host}${portPart}/${conn.dbName}`;
       }
 
-      mongoClient = new MongoClient(uri, { serverSelectionTimeoutMS: 6000 });
+      mongoClient = new MongoClient(uri, { serverSelectionTimeoutMS: 8000 });
       await mongoClient.connect();
       const db = mongoClient.db(conn.dbName);
 
-      const targetColl = findRelevantTable(conn.schemaContext, prompt);
-      const sample = await db.collection(targetColl).find({}).limit(10).toArray();
+      const defaultCol = findRelevantTable(conn.schemaContext, prompt);
+      const spec = parseMongoQuery(query, defaultCol);
+      const collName = spec.collection || defaultCol;
+      const targetCollection = db.collection(collName);
+
+      let docs: Record<string, unknown>[] = [];
+
+      console.log(`[DataBridge AI Debug] 🍃 Step 2: Executing MongoDB query on "${conn.name}" (db: ${conn.dbName}, coll: ${collName})...`);
+
+      if (spec.pipeline && Array.isArray(spec.pipeline) && spec.pipeline.length > 0) {
+        console.log(`[DataBridge AI Debug] 🍃 Running aggregation pipeline:`, JSON.stringify(spec.pipeline));
+        docs = await targetCollection.aggregate(spec.pipeline).toArray();
+      } else {
+        const filter = spec.filter || {};
+        const sort = spec.sort || {};
+        const limit = Math.min(Math.max(Number(spec.limit) || 15, 1), 50);
+        const projection = spec.projection || {};
+
+        console.log(`[DataBridge AI Debug] 🍃 Running find: filter=${JSON.stringify(filter)}, sort=${JSON.stringify(sort)}, limit=${limit}`);
+
+        let cursor = targetCollection.find(filter);
+        if (Object.keys(sort).length > 0) {
+          cursor = cursor.sort(sort as Record<string, 1 | -1>);
+        }
+        if (Object.keys(projection).length > 0) {
+          cursor = cursor.project(projection);
+        }
+        docs = await cursor.limit(limit).toArray();
+
+        // If filter returned 0 documents, try a relaxed query on the target collection
+        if (docs.length === 0 && Object.keys(filter).length > 0) {
+          console.log(`[DataBridge AI Debug] 🍃 Filter returned 0 docs, falling back to sample in "${collName}"`);
+          docs = await targetCollection.find({}).limit(10).toArray();
+        }
+      }
+
+      // Serialize BSON fields (ObjectId, Date, etc.) to clean JSON
+      const serialized = docs.map((doc) => serializeBsonDoc(doc) as Record<string, unknown>);
+
+      console.log(`[DataBridge AI Debug] 🍃 Retrieved ${serialized.length} document(s) from MongoDB collection "${collName}".`);
 
       return {
         sourceName: conn.name,
         dbType: "MongoDB",
-        results: sample.length > 0 ? sample : generateFallbackQueryResults(prompt, conn.dbName),
+        results: serialized.length > 0 ? serialized : generateFallbackQueryResults(prompt, conn.dbName),
       };
-    } catch (err) {
-      console.warn(`[executeDatabaseQuery] MongoDB query notice on ${conn.name}:`, err);
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      console.warn(`[executeDatabaseQuery] MongoDB query notice on ${conn.name}:`, errorMsg);
+
+      // Fallback: fetch 5 sample documents from relevant collection so user gets REAL data
+      if (mongoClient) {
+        try {
+          const db = mongoClient.db(conn.dbName);
+          const defaultCol = findRelevantTable(conn.schemaContext, prompt);
+          const sample = await db.collection(defaultCol).find({}).limit(5).toArray();
+          if (sample.length > 0) {
+            return {
+              sourceName: conn.name,
+              dbType: "MongoDB",
+              results: sample.map((d) => serializeBsonDoc(d) as Record<string, unknown>),
+            };
+          }
+        } catch {}
+      }
+
       return {
         sourceName: conn.name,
         dbType: "MongoDB",
@@ -548,11 +845,52 @@ async function executeDatabaseQuery(
         );
       }
       const firestore = getFirestore(fbApp);
-      const targetColl = findRelevantTable(conn.schemaContext, prompt);
-      const snapshot = await firestore.collection(targetColl).limit(10).get();
+      const defaultCol = findRelevantTable(conn.schemaContext, prompt);
+      const spec = parseFirestoreQuery(query, defaultCol);
+      const collName = spec.collection || defaultCol;
+
+      console.log(`[DataBridge AI Debug] 🔥 Step 2: Executing Firestore query on "${conn.name}" (collection: ${collName})...`);
+
+      let q: FirebaseFirestore.Query = firestore.collection(collName);
+
+      if (Array.isArray(spec.where)) {
+        for (const [field, op, val] of spec.where) {
+          if (field && op && val !== undefined) {
+            try {
+              q = q.where(field, op as FirebaseFirestore.WhereFilterOp, val);
+            } catch (whereErr) {
+              console.warn(`[DataBridge AI Debug] 🔥 Firestore where clause skipped:`, whereErr);
+            }
+          }
+        }
+      }
+
+      if (spec.orderBy) {
+        try {
+          q = q.orderBy(spec.orderBy, spec.orderDirection || "asc");
+        } catch (orderErr) {
+          console.warn(`[DataBridge AI Debug] 🔥 Firestore orderBy skipped:`, orderErr);
+        }
+      }
+
+      const limit = Math.min(Math.max(Number(spec.limit) || 15, 1), 50);
+      q = q.limit(limit);
+
+      let snapshot;
+      try {
+        snapshot = await q.get();
+      } catch (qErr: unknown) {
+        console.warn(`[DataBridge AI Debug] 🔥 Firestore composite query notice, falling back to simple scan:`, qErr);
+        snapshot = await firestore.collection(collName).limit(limit).get();
+      }
 
       const docs: Record<string, unknown>[] = [];
-      snapshot.forEach((d) => docs.push({ id: d.id, ...d.data() }));
+      snapshot.forEach((d) => {
+        const data = d.data();
+        docs.push(serializeFirestoreDoc({ id: d.id, ...data }) as Record<string, unknown>);
+      });
+
+      console.log(`[DataBridge AI Debug] 🔥 Retrieved ${docs.length} document(s) from Firestore collection "${collName}".`);
 
       return {
         sourceName: conn.name,
@@ -757,9 +1095,14 @@ export async function POST(req: Request) {
     for (const conn of connections) {
       // 1. Generate query specifically for THIS database in isolation
       const rawQuery = await generateQueryForSingleDatabase(conn, prompt, modelInfo, recentContextSummary);
-      const safeQuery = isSafeReadOnlyQuery(rawQuery)
-        ? rawQuery
-        : getSafeFallbackQuery(conn, prompt);
+      const isNoSql =
+        conn.dbType.toLowerCase() === "mongodb" ||
+        conn.dbType.toLowerCase() === "firebase" ||
+        conn.dbType.toLowerCase() === "firestore";
+
+      const safeQuery = isNoSql
+        ? (isSafeReadOnlyNoSqlQuery(rawQuery) ? rawQuery : getSafeFallbackQuery(conn, prompt))
+        : (isSafeReadOnlyQuery(rawQuery) ? rawQuery : getSafeFallbackQuery(conn, prompt));
 
       // 2. Execute query on THIS database
       const result = await executeDatabaseQuery(conn, safeQuery, prompt);
