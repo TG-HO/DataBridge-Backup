@@ -14,6 +14,7 @@ import {
   Terminal,
   Plus,
   Trash2,
+  LayoutDashboard,
 } from "lucide-react";
 import { useQuerySessions } from "@/lib/query-session-context";
 
@@ -98,6 +99,21 @@ export default function Sidebar({ user }: SidebarProps) {
               <span>AI Query Space</span>
               <span className="text-[9px] font-mono text-indigo-300 bg-indigo-500/10 px-1.5 py-0.5 rounded border border-indigo-500/20">
                 Chat
+              </span>
+            </div>
+          )}
+        </Link>
+        <Link
+          href="/dashboard"
+          className="w-full flex items-center gap-2.5 p-2 rounded-xl hover:bg-white/[0.05] text-slate-300 hover:text-white text-xs font-medium transition-all group"
+          title="Customizable Grid Dashboards"
+        >
+          <LayoutDashboard className="w-4 h-4 text-purple-400 shrink-0 group-hover:scale-110 transition-transform" />
+          {!isCollapsed && (
+            <div className="flex items-center justify-between flex-1">
+              <span>Dashboards</span>
+              <span className="text-[9px] font-mono text-purple-300 bg-purple-500/10 px-1.5 py-0.5 rounded border border-purple-500/20">
+                Grid
               </span>
             </div>
           )}

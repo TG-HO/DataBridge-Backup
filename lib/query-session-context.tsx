@@ -8,6 +8,10 @@ export interface ChatMessage {
   content: string;
   timestamp: string;
   targetedDatabases?: { id: string; name: string; dbType: string }[];
+  connectionId?: string;
+  rawQuery?: string;
+  isError?: boolean;
+  errorMessage?: string;
 }
 
 export interface QuerySession {

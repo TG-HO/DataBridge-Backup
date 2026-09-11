@@ -75,6 +75,7 @@ model Organization {
 
   members       OrganizationUser[]
   dbConnections DbConnection[]
+  dashboards    Dashboard[]
 }
 
 model OrganizationUser {
@@ -105,3 +106,32 @@ model DbConnection {
 
   organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
 }
+
+model Dashboard {
+  id          String            @id @default(cuid())
+  orgId       String
+  name        String
+  description String?           @db.NVarChar(Max)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  organization Organization    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  widgets      DashboardWidget[]
+}
+
+model DashboardWidget {
+  id           String   @id @default(cuid())
+  dashboardId  String
+  title        String
+  description  String?  @db.NVarChar(Max)
+  chartType    String   // BAR, LINE, AREA, PIE, TABLE
+  chartConfig  String   @db.NVarChar(Max) // JSON storing xAxisKey, dataKeys, title, colors
+  rawQuery     String   @db.NVarChar(Max)
+  connectionId String
+  layout       String   @db.NVarChar(Max) // JSON storing { x, y, w, h, minW, minH }
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  dashboard Dashboard @relation(fields: [dashboardId], references: [id], onDelete: Cascade)
+}
+

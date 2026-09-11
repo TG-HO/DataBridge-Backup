@@ -1074,6 +1074,7 @@ export async function POST(req: Request) {
     // Guarantees zero syntax collision and prevents ambiguous column errors
     // ----------------------------------------------------------------
     const executionResults: Array<{ sourceName: string; dbType: string; results: unknown[] }> = [];
+    const rawQueriesMap: Record<string, string> = {};
 
     // Compact context from immediate previous turns to resolve references (e.g., 'who is this customer?')
     const recentTurns = chatHistory.slice(-2);
@@ -1084,6 +1085,7 @@ export async function POST(req: Request) {
     for (const conn of connections) {
       // 1. Generate query specifically for THIS database in isolation
       const rawQuery = await generateQueryForSingleDatabase(conn, prompt, modelInfo, recentContextSummary);
+      rawQueriesMap[conn.id] = rawQuery;
       const isNoSql =
         conn.dbType.toLowerCase() === "mongodb" ||
         conn.dbType.toLowerCase() === "firebase" ||
@@ -1099,7 +1101,7 @@ export async function POST(req: Request) {
     }
 
     // ----------------------------------------------------------------
-    // STEP 3: Unified Executive Business Intelligence Presentation (Streaming)
+    // STEP 3: Unified Executive Business Intelligence Presentation & Auto-Visualization (FR-11)
     // ----------------------------------------------------------------
     // Prune previous chat history so it doesn't inflate token context or cause repetitive answers
     const compactHistory = chatHistory.slice(-4).map((m) => ({
@@ -1116,108 +1118,157 @@ export async function POST(req: Request) {
     }));
 
     const connectedDbNames = connections.map((c) => `${c.name} (${c.dbType.toUpperCase()})`).join(", ");
+    const primaryConnectionId = connections[0]?.id || "";
+    const primaryRawQuery = rawQueriesMap[primaryConnectionId] || "";
+
+    // ----------------------------------------------------------------
+    // Pre-calculate Autonomous Structured Output Fallback
+    // Guarantees that if the upstream LLM fails, rate-limits (429), or times out,
+    // the user ALWAYS receives verified database records and working visualizations.
+    // ----------------------------------------------------------------
+    const allRows: Record<string, unknown>[] = [];
+    for (const er of executionResults) {
+      if (Array.isArray(er.results)) {
+        for (const r of er.results.slice(0, 25)) {
+          if (r && typeof r === "object") {
+            allRows.push({ ...(r as Record<string, unknown>) });
+          }
+        }
+      }
+    }
+
+    const firstRow = allRows[0] || {};
+    const keys = Object.keys(firstRow).filter((k) => k !== "id" && k !== "_id");
+    const primaryXKey = keys[0] || "Category";
+    const numericKeys = keys.filter((k) => {
+      const val = firstRow[k];
+      return typeof val === "number" || (!isNaN(Number(val)) && val !== null && val !== "");
+    });
+
+    const fallbackVisualization = {
+      summary: `## Executive Summary: ${prompt}\n\nRetrieved ${allRows.length} verified records from **${connectedDbNames}** answering "${prompt}".\n\n### Strategic Business Insights:\n- **Verified Data:** Live data records retrieved directly from [${connectedDbNames}].\n- **Auto-Visualization:** Formatted dynamically for chart analysis, table inspection, and multi-format exports.\n- **Actionable Takeaways:** Cross-reference trends or pin this visual to your custom workspace dashboard.`,
+      recommendedVisualization: numericKeys.length > 0 ? "BAR" : "TABLE",
+      chartConfig: {
+        xAxisKey: primaryXKey,
+        dataKeys: numericKeys.slice(0, 2),
+        title: prompt.slice(0, 45) || "Analytics Overview",
+      },
+      data: allRows,
+      rawQuery: primaryRawQuery,
+      connectionId: primaryConnectionId,
+    };
 
     if (modelInfo.isConfigured && modelInfo.model) {
       const synthStartTime = Date.now();
       console.log(`[DataBridge AI Debug] 📊 Step 3: Launching executive AI synthesis stream via ${modelInfo.providerName} (${modelInfo.modelName})...`);
 
-      const summaryStream = streamText({
-        model: modelInfo.model,
-        system: `${MASTER_ANALYST_SYSTEM_PROMPT}
+      const encoder = new TextEncoder();
+      const resilientStream = new ReadableStream({
+        async start(controller) {
+          let chunksEmitted = 0;
+          try {
+            const summaryStream = streamText({
+              model: modelInfo.model!,
+              maxRetries: 1,
+              system: `${MASTER_ANALYST_SYSTEM_PROMPT}
 
-EXECUTIVE BUSINESS INTELLIGENCE MANDATE:
-You are preparing an executive response for leadership based on verified data retrieved from the following currently selected target database(s): [${connectedDbNames}].
+EXECUTIVE BUSINESS INTELLIGENCE & AUTO-VISUALIZATION MANDATE:
+You are an executive data analyst preparing business insights from target database(s): [${connectedDbNames}].
 
-MANDATORY RULES:
-1. STRICT DATABASE ISOLATION:
-   You must refer ONLY to the data retrieved from the currently selected database(s) ([${connectedDbNames}]). DO NOT reference, repeat, or pull in records/metrics from other databases or previous queries that are not in this selection.
+MANDATORY RESPONSE FORMAT (STRICT JSON SCHEMA):
+You MUST formulate your response as a valid, well-formed JSON object matching this exact schema:
+{
+  "summary": "Executive summary markdown string answering the user's question, with 2-3 strategic takeaways under '### Strategic Business Insights'.",
+  "recommendedVisualization": "BAR" | "LINE" | "AREA" | "PIE" | "TABLE",
+  "chartConfig": {
+    "xAxisKey": "string (the primary categorical, entity, or date column from data)",
+    "dataKeys": ["string (one or more numeric metric column names to plot)"],
+    "title": "string (concise descriptive chart title)"
+  },
+  "data": [
+    /* Array of clean data objects from the verified records. Ensure numbers are numbers and keys match chartConfig */
+  ]
+}
 
-2. ANSWER ONLY THE CURRENT QUESTION:
-   Directly answer the user's specific request: "${prompt}".
-   DO NOT repeat, re-summarize, or re-output prior query results, previous sales figures, or unrelated metrics from earlier conversation turns.
-   If the user asks "who is this customer?", provide that customer's details directly. Do NOT attach an unrequested full sales breakdown from other databases.
+VISUALIZATION RULES:
+- Use "BAR" for category comparisons (customers, products, departments, status).
+- Use "LINE" for chronological trends over time, dates, or months.
+- Use "AREA" for volume or cumulative growth over time.
+- Use "PIE" for proportion breakdowns or percentage share (up to 7 categories).
+- Use "TABLE" for detailed tabular listings, audit trails, or non-numeric data.
+- Output ONLY the JSON object. Do not add introductory or concluding conversational chat outside the JSON.`,
+              messages: [
+                ...compactHistory,
+                {
+                  role: "user",
+                  content: prompt,
+                },
+                {
+                  role: "assistant",
+                  content: `Verified Database Records for Selected Database(s) (${connectedDbNames}):\n${JSON.stringify(executionContextForAI, null, 2)}`,
+                },
+                {
+                  role: "user",
+                  content: `Please answer the question: "${prompt}". Return ONLY the strict JSON object with "summary", "recommendedVisualization", "chartConfig", and "data" based on verified records from [${connectedDbNames}].`,
+                },
+              ],
+              onFinish({ text }) {
+                console.log(`[DataBridge AI Debug] 🏁 Stream complete in ${Date.now() - synthStartTime}ms. Output length: ${text.length} characters.`);
+              },
+              onError({ error }) {
+                console.error(`[DataBridge AI Debug] ❌ Stream synthesis error after ${Date.now() - synthStartTime}ms:`, error);
+              },
+            });
 
-3. CONTEXT USAGE RULE:
-   Use conversational context ONLY when needed to resolve references or pronouns (e.g. "who is this customer?", "show their orders", "what was that balance?").
-   NEVER use context to repeat or regurgitate answers to previous queries.
-
-4. TABULAR DATA MANDATE:
-   Whenever displaying multiple records, customer lists, order items, transaction breakdowns, or cross-database metrics, ALWAYS format the data in clean, well-aligned Markdown tables (| Column 1 | Column 2 | ...).
-   DO NOT format multi-row or structured record data as bullet points.
-   Reserve bullet points ONLY for 2-3 brief strategic takeaways under "### Strategic Business Insights".
-
-5. EXECUTIVE STRUCTURE:
-   - ## Executive Summary: [Topic Focus of "${prompt}"]
-   - Structured markdown table(s) of verified records.
-   - ### Strategic Business Insights (2-3 concise bullets highlighting actionable takeaways directly answering "${prompt}").
-   - NEVER output raw SQL queries, SQL code fences (\`\`\`sql ... \`\`\`), or database syntax.`,
-        messages: [
-          ...compactHistory,
-          {
-            role: "user",
-            content: prompt,
-          },
-          {
-            role: "assistant",
-            content: `Verified Database Records for Selected Database(s) (${connectedDbNames}):\n${JSON.stringify(executionContextForAI, null, 2)}`,
-          },
-          {
-            role: "user",
-            content: `Please answer the current question: "${prompt}". Refer ONLY to the verified records retrieved from [${connectedDbNames}]. Format tabular data as Markdown tables. Answer only what is asked without reciting past sales or prior queries. Do not show any SQL.`,
-          },
-        ],
-        onFinish({ text }) {
-          console.log(`[DataBridge AI Debug] 🏁 Stream complete in ${Date.now() - synthStartTime}ms. Output length: ${text.length} characters.`);
-        },
-        onError({ error }) {
-          console.error(`[DataBridge AI Debug] ❌ Stream synthesis error after ${Date.now() - synthStartTime}ms:`, error);
+            for await (const textPart of summaryStream.textStream) {
+              controller.enqueue(encoder.encode(textPart));
+              chunksEmitted++;
+            }
+          } catch (streamErr) {
+            console.warn(`[DataBridge AI Debug] ⚠️ Upstream stream error (handled with fallback):`, streamErr);
+            if (chunksEmitted === 0) {
+              const fallbackJson = JSON.stringify(fallbackVisualization, null, 2);
+              const chunks = fallbackJson.match(/.{1,48}/g) || [fallbackJson];
+              for (const c of chunks) {
+                controller.enqueue(encoder.encode(c));
+                await new Promise((resolve) => setTimeout(resolve, 8));
+              }
+            } else {
+              controller.enqueue(
+                encoder.encode(
+                  `\n\n⚠️ **Notice:** Stream interrupted by upstream provider: ${
+                    streamErr instanceof Error ? streamErr.message : "Service busy"
+                  }`
+                )
+              );
+            }
+          } finally {
+            controller.close();
+          }
         },
       });
 
-      return summaryStream.toTextStreamResponse();
+      return new Response(resilientStream, {
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "Transfer-Encoding": "chunked",
+          "X-Connection-Id": primaryConnectionId,
+          "X-Raw-Query": encodeURIComponent(primaryRawQuery),
+        },
+      });
     }
 
     // ----------------------------------------------------------------
-    // STEP 4: Autonomous Simplified Business Summary Fallback
+    // STEP 4: Autonomous Simulation Fallback (When no LLM configured)
     // ----------------------------------------------------------------
-    const allRows: Record<string, unknown>[] = [];
-    for (const er of executionResults) {
-      for (const r of er.results.slice(0, 8)) {
-        allRows.push({
-          Database: er.sourceName,
-          ...(r as Record<string, unknown>),
-        });
-      }
-    }
-
-    const rowsToDisplay = allRows.slice(0, 10);
-    const firstRow = rowsToDisplay[0] || {};
-    const headers = Object.keys(firstRow).filter((k) => k !== "id" && k !== "_id");
-
-    const tableHeader = `| ${headers.join(" | ")} |\n| ${headers.map(() => "---").join(" | ")} |`;
-    const tableRows = rowsToDisplay
-      .map((rowItem) => `| ${headers.map((h) => String(rowItem[h] ?? "")).join(" | ")} |`)
-      .join("\n");
-
-    const simplifiedBusinessResponse = `## Executive Summary: ${prompt}
-
-Here is the data retrieved from the selected database(s) (**${connectedDbNames}**):
-
-${tableHeader}
-${tableRows}
-
-### Strategic Business Insights:
-- **Verified Record Standing:** Retrieved current records answering "${prompt}" from ${connectedDbNames}.
-- **Target Database Isolation:** Strictly scoped to the actively selected data source(s).
-`;
-
+    const jsonString = JSON.stringify(fallbackVisualization, null, 2);
     const encoder = new TextEncoder();
     const customStream = new ReadableStream({
       async start(controller) {
-        const chunks = simplifiedBusinessResponse.match(/.{1,16}/g) || [simplifiedBusinessResponse];
+        const chunks = jsonString.match(/.{1,32}/g) || [jsonString];
         for (const chunk of chunks) {
           controller.enqueue(encoder.encode(chunk));
-          await new Promise((resolve) => setTimeout(resolve, 15));
+          await new Promise((resolve) => setTimeout(resolve, 10));
         }
         controller.close();
       },
@@ -1227,6 +1278,8 @@ ${tableRows}
       headers: {
         "Content-Type": "text/plain; charset=utf-8",
         "Transfer-Encoding": "chunked",
+        "X-Connection-Id": primaryConnectionId,
+        "X-Raw-Query": encodeURIComponent(primaryRawQuery),
       },
     });
   } catch (error) {

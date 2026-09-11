@@ -31,6 +31,44 @@ import { useQuerySessions, ChatMessage } from "@/lib/query-session-context";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import DynamicDataVisualizer, { ChartType, ChartConfig } from "@/components/dynamic-data-visualizer";
+import PinWidgetModal from "@/components/pin-widget-modal";
+
+interface ParsedVisualization {
+  summary: string;
+  recommendedVisualization: ChartType;
+  chartConfig?: ChartConfig;
+  data: Record<string, unknown>[];
+}
+
+function parseVisualizationPayload(content: string): ParsedVisualization | null {
+  if (!content) return null;
+  const trimmed = content.trim();
+
+  // 1. Direct JSON parse attempt
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === "object" && Array.isArray(parsed.data)) {
+      return parsed as ParsedVisualization;
+    }
+  } catch {}
+
+  // 2. Extract from markdown code fences or JSON boundary
+  const jsonMatch =
+    trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/) ||
+    trimmed.match(/(\{[\s\S]*"data"[\s\S]*\})/);
+
+  if (jsonMatch) {
+    try {
+      const candidate = JSON.parse(jsonMatch[1] || jsonMatch[0]);
+      if (candidate && typeof candidate === "object" && Array.isArray(candidate.data)) {
+        return candidate as ParsedVisualization;
+      }
+    } catch {}
+  }
+
+  return null;
+}
 
 interface DbConnectionOption {
   id: string;
@@ -125,7 +163,18 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
   const [hoveredMsgId, setHoveredMsgId] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
+  const [activeAssistantId, setActiveAssistantId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Pin Widget Modal state (FR-12)
+  const [pinTargetWidget, setPinTargetWidget] = useState<{
+    title: string;
+    chartType: string;
+    chartConfig: any;
+    rawQuery?: string;
+    connectionId?: string;
+    data?: any[];
+  } | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const { textareaRef, adjustHeight } = useAutoResizeTextarea({
@@ -219,6 +268,7 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
 
     const userMsgId = `user-${Date.now()}`;
     const assistantMsgId = `assistant-${Date.now()}`;
+    setActiveAssistantId(assistantMsgId);
     const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
     // 1. Append User & Placeholder Assistant Message
@@ -250,6 +300,11 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
       }));
 
     const clientStartTime = Date.now();
+    const abortController = new AbortController();
+    const timeoutId = setTimeout(() => {
+      abortController.abort("Query timed out after 45 seconds");
+    }, 45000);
+
     console.log(
       "%c[DataBridge AI Console]%c Submitting query to /api/chat:",
       "background: #4f46e5; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;",
@@ -266,18 +321,24 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
           connectionIds: selectedConnIds,
           chatHistory: historyPayload,
         }),
+        signal: abortController.signal,
       });
 
       console.log(`[DataBridge AI Console] HTTP status ${res.status} received in ${Date.now() - clientStartTime}ms`);
 
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.error || `Server responded with status ${res.status}`);
+        throw new Error(errorData.error || errorData.details || `Server responded with status ${res.status}`);
       }
 
       if (!res.body) {
-        throw new Error("No response body received from server");
+        throw new Error("No response stream received from the server");
       }
+
+      const connectionIdHeader = res.headers.get("X-Connection-Id") || selectedConnIds[0] || "";
+      const rawQueryHeader = res.headers.get("X-Raw-Query")
+        ? decodeURIComponent(res.headers.get("X-Raw-Query")!)
+        : "";
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -298,29 +359,57 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
 
           updateActiveSessionMessages((prev) =>
             prev.map((msg) =>
-              msg.id === assistantMsgId ? { ...msg, content: accumulated } : msg
+              msg.id === assistantMsgId
+                ? {
+                    ...msg,
+                    content: accumulated,
+                    connectionId: connectionIdHeader,
+                    rawQuery: rawQueryHeader,
+                    isError: false,
+                  }
+                : msg
             )
           );
         }
       }
 
+      clearTimeout(timeoutId);
+
+      if (!accumulated.trim()) {
+        throw new Error(
+          "The database engine executed the query, but the synthesis service returned an empty response. This can happen if the AI model is temporarily rate-limited. Please retry."
+        );
+      }
+
       console.log(`[DataBridge AI Console] ✅ Response stream completed in ${Date.now() - clientStartTime}ms (${accumulated.length} chars).`);
-    } catch (err) {
+    } catch (err: unknown) {
+      clearTimeout(timeoutId);
+      const isAbort = err === "Query timed out after 45 seconds" || (err instanceof Error && err.name === "AbortError");
+      const errText = isAbort
+        ? "The query request timed out after 45 seconds. The database query or AI synthesis took too long to complete."
+        : err instanceof Error
+        ? err.message
+        : "Failed to execute query.";
+
       console.error(`[DataBridge AI Console] ❌ Error in chat query after ${Date.now() - clientStartTime}ms:`, err);
-      const errText = err instanceof Error ? err.message : "Failed to execute query.";
       setError(errText);
+
       updateActiveSessionMessages((prev) =>
         prev.map((msg) =>
           msg.id === assistantMsgId
             ? {
                 ...msg,
-                content: `**Notice:** Unable to retrieve data from target database(s). ${errText}`,
+                content: `⚠️ **Query Processing Notice**\n\n${errText}\n\n*Suggestion:* Check your database connection status or click **Retry Query** below.`,
+                isError: true,
+                errorMessage: errText,
               }
             : msg
         )
       );
     } finally {
+      clearTimeout(timeoutId);
       setLoading(false);
+      setActiveAssistantId(null);
     }
   };
 
@@ -522,7 +611,7 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
 
           {/* Rendered Conversation Messages */}
           {hasUserQueries &&
-            messages.map((msg) => {
+            messages.map((msg, index) => {
               const isUser = msg.role === "user";
               const sanitizedContent = stripSqlBlocks(msg.content);
 
@@ -563,97 +652,254 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
                       </div>
                     ) : (
                       /* Assistant Card */
-                      <div className="space-y-2">
-                        <div className="p-5 sm:p-6 rounded-2xl bg-black/75 border border-white/15 shadow-2xl text-neutral-200 text-xs leading-relaxed max-w-3xl backdrop-blur-xl">
-                          {sanitizedContent ? (
-                            <ReactMarkdown
-                              remarkPlugins={[remarkGfm]}
-                              components={{
-                                table: ({ ...props }) => (
-                                  <div className="my-4 overflow-x-auto rounded-xl border border-white/15 shadow-lg bg-black/50">
-                                    <table
-                                      className="w-full text-left text-xs border-collapse font-sans"
-                                      {...props}
-                                    />
+                      <div className="space-y-3 max-w-3xl">
+                        {(() => {
+                          const isErrorMessage = Boolean(
+                            msg.isError ||
+                            (sanitizedContent && (
+                              sanitizedContent.startsWith("⚠️") ||
+                              sanitizedContent.startsWith("**Notice:**") ||
+                              sanitizedContent.toLowerCase().startsWith("error:") ||
+                              sanitizedContent.toLowerCase().includes("unable to retrieve data from target database")
+                            ))
+                          );
+
+                          if (isErrorMessage) {
+                            return (
+                              <div className="p-5 sm:p-6 rounded-2xl bg-gradient-to-b from-rose-950/40 to-black/85 border border-rose-500/30 shadow-2xl backdrop-blur-xl text-neutral-200">
+                                <div className="flex items-start gap-3.5">
+                                  <div className="w-8 h-8 rounded-xl bg-rose-500/20 border border-rose-500/40 flex items-center justify-center text-rose-400 shrink-0 mt-0.5 shadow-lg shadow-rose-950/50">
+                                    <AlertCircle className="w-4 h-4" />
                                   </div>
-                                ),
-                                thead: ({ ...props }) => (
-                                  <thead
-                                    className="bg-slate-900/90 text-neutral-200 border-b border-white/15 font-semibold"
-                                    {...props}
-                                  />
-                                ),
-                                th: ({ ...props }) => (
-                                  <th
-                                    className="px-4 py-3 text-[11px] font-bold tracking-wider text-indigo-300 uppercase whitespace-nowrap bg-white/[0.03]"
-                                    {...props}
-                                  />
-                                ),
-                                tbody: ({ ...props }) => (
-                                  <tbody
-                                    className="divide-y divide-white/5 bg-black/40"
-                                    {...props}
-                                  />
-                                ),
-                                tr: ({ ...props }) => (
-                                  <tr
-                                    className="hover:bg-indigo-500/10 transition-colors even:bg-white/[0.02]"
-                                    {...props}
-                                  />
-                                ),
-                                td: ({ ...props }) => (
-                                  <td
-                                    className="px-4 py-3 text-xs text-neutral-200 font-mono whitespace-nowrap"
-                                    {...props}
-                                  />
-                                ),
-                                h2: ({ ...props }) => (
-                                  <h2
-                                    className="text-base font-bold text-white mt-1 mb-2 tracking-tight flex items-center gap-2"
-                                    {...props}
-                                  />
-                                ),
-                                h3: ({ ...props }) => (
-                                  <h3
-                                    className="text-xs font-bold text-indigo-300 mt-4 mb-1.5 uppercase tracking-wider"
-                                    {...props}
-                                  />
-                                ),
-                                h4: ({ ...props }) => (
-                                  <h4
-                                    className="text-xs font-bold text-indigo-300 mt-3 mb-1"
-                                    {...props}
-                                  />
-                                ),
-                                p: ({ ...props }) => (
-                                  <p
-                                    className="text-xs text-neutral-300 leading-relaxed my-1.5"
-                                    {...props}
-                                  />
-                                ),
-                                ul: ({ ...props }) => (
-                                  <ul
-                                    className="list-disc list-outside pl-4 space-y-1.5 my-2 text-xs text-neutral-300"
-                                    {...props}
-                                  />
-                                ),
-                                li: ({ ...props }) => (
-                                  <li className="text-xs text-neutral-300 leading-relaxed" {...props} />
-                                ),
-                                strong: ({ ...props }) => (
-                                  <strong className="font-semibold text-white" {...props} />
-                                ),
-                              }}
-                            >
-                              {sanitizedContent}
-                            </ReactMarkdown>
-                          ) : (
-                            <div className="flex items-center gap-2.5 text-neutral-400 font-mono text-xs py-2">
-                              <RefreshCw className="w-4 h-4 animate-spin text-indigo-400" />
-                              <span>Synthesizing verified database query results...</span>
+                                  <div className="space-y-2.5 flex-1 min-w-0">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <h4 className="text-xs font-bold text-rose-300 uppercase tracking-wider font-mono">
+                                        Query Processing Notice
+                                      </h4>
+                                      <span className="text-[9px] font-mono text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded border border-rose-500/20">
+                                        Needs Attention
+                                      </span>
+                                    </div>
+
+                                    <div className="text-xs text-neutral-300 leading-relaxed font-sans prose prose-invert max-w-none">
+                                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                        {sanitizedContent || msg.errorMessage || "The query encountered an unexpected issue while executing or synthesizing database records."}
+                                      </ReactMarkdown>
+                                    </div>
+
+                                    <div className="pt-2 flex flex-wrap items-center gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const prevUserMsg = messages
+                                            .slice(0, index)
+                                            .reverse()
+                                            .find((m: ChatMessage) => m.role === "user");
+                                          if (prevUserMsg) {
+                                            handleQuickPrompt(prevUserMsg.content);
+                                          }
+                                        }}
+                                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-200 hover:text-white text-xs font-medium transition-all shadow-sm cursor-pointer"
+                                      >
+                                        <RefreshCw className="w-3.5 h-3.5" />
+                                        <span>Retry Query</span>
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          }
+
+                          const parsedViz = parseVisualizationPayload(sanitizedContent);
+
+                          if (parsedViz) {
+                            return (
+                              <div className="space-y-4">
+                                {/* Executive Summary Markdown */}
+                                <div className="p-5 sm:p-6 rounded-2xl bg-black/75 border border-white/15 shadow-2xl text-neutral-200 text-xs leading-relaxed backdrop-blur-xl">
+                                  <ReactMarkdown
+                                    remarkPlugins={[remarkGfm]}
+                                    components={{
+                                      table: ({ ...props }) => (
+                                        <div className="my-4 overflow-x-auto rounded-xl border border-white/15 shadow-lg bg-black/50">
+                                          <table className="w-full text-left text-xs border-collapse font-sans" {...props} />
+                                        </div>
+                                      ),
+                                      thead: ({ ...props }) => (
+                                        <thead className="bg-slate-900/90 text-neutral-200 border-b border-white/15 font-semibold" {...props} />
+                                      ),
+                                      th: ({ ...props }) => (
+                                        <th className="px-4 py-3 text-[11px] font-bold tracking-wider text-indigo-300 uppercase whitespace-nowrap bg-white/[0.03]" {...props} />
+                                      ),
+                                      tbody: ({ ...props }) => (
+                                        <tbody className="divide-y divide-white/5 bg-black/40" {...props} />
+                                      ),
+                                      tr: ({ ...props }) => (
+                                        <tr className="hover:bg-indigo-500/10 transition-colors even:bg-white/[0.02]" {...props} />
+                                      ),
+                                      td: ({ ...props }) => (
+                                        <td className="px-4 py-3 text-xs text-neutral-200 font-mono whitespace-nowrap" {...props} />
+                                      ),
+                                      h2: ({ ...props }) => (
+                                        <h2 className="text-base font-bold text-white mt-1 mb-2 tracking-tight flex items-center gap-2" {...props} />
+                                      ),
+                                      h3: ({ ...props }) => (
+                                        <h3 className="text-xs font-bold text-indigo-300 mt-4 mb-1.5 uppercase tracking-wider" {...props} />
+                                      ),
+                                      h4: ({ ...props }) => (
+                                        <h4 className="text-xs font-bold text-indigo-300 mt-3 mb-1" {...props} />
+                                      ),
+                                      p: ({ ...props }) => (
+                                        <p className="text-xs text-neutral-300 leading-relaxed my-1.5" {...props} />
+                                      ),
+                                      ul: ({ ...props }) => (
+                                        <ul className="list-disc list-outside pl-4 space-y-1.5 my-2 text-xs text-neutral-300" {...props} />
+                                      ),
+                                      li: ({ ...props }) => (
+                                        <li className="text-xs text-neutral-300 leading-relaxed" {...props} />
+                                      ),
+                                      strong: ({ ...props }) => (
+                                        <strong className="font-semibold text-white" {...props} />
+                                      ),
+                                    }}
+                                  >
+                                    {parsedViz.summary}
+                                  </ReactMarkdown>
+                                </div>
+
+                                {/* Dynamic Auto-Visualization (FR-11, FR-12, FR-13) */}
+                                <DynamicDataVisualizer
+                                  recommendedVisualization={parsedViz.recommendedVisualization}
+                                  chartConfig={parsedViz.chartConfig}
+                                  data={parsedViz.data}
+                                  summary={parsedViz.summary}
+                                  rawQuery={msg.rawQuery}
+                                  connectionId={msg.connectionId || selectedConnIds[0]}
+                                  onPin={() =>
+                                    setPinTargetWidget({
+                                      title: parsedViz.chartConfig?.title || "Analytics Visualization",
+                                      chartType: parsedViz.recommendedVisualization,
+                                      chartConfig: parsedViz.chartConfig || {},
+                                      rawQuery: msg.rawQuery || "",
+                                      connectionId: msg.connectionId || selectedConnIds[0] || "",
+                                      data: parsedViz.data,
+                                    })
+                                  }
+                                />
+                              </div>
+                            );
+                          }
+
+                          if (sanitizedContent) {
+                            return (
+                              <div className="p-5 sm:p-6 rounded-2xl bg-black/75 border border-white/15 shadow-2xl text-neutral-200 text-xs leading-relaxed backdrop-blur-xl">
+                                <ReactMarkdown
+                                  remarkPlugins={[remarkGfm]}
+                                  components={{
+                                    table: ({ ...props }) => (
+                                      <div className="my-4 overflow-x-auto rounded-xl border border-white/15 shadow-lg bg-black/50">
+                                        <table className="w-full text-left text-xs border-collapse font-sans" {...props} />
+                                      </div>
+                                    ),
+                                    thead: ({ ...props }) => (
+                                      <thead className="bg-slate-900/90 text-neutral-200 border-b border-white/15 font-semibold" {...props} />
+                                    ),
+                                    th: ({ ...props }) => (
+                                      <th className="px-4 py-3 text-[11px] font-bold tracking-wider text-indigo-300 uppercase whitespace-nowrap bg-white/[0.03]" {...props} />
+                                    ),
+                                    tbody: ({ ...props }) => (
+                                      <tbody className="divide-y divide-white/5 bg-black/40" {...props} />
+                                    ),
+                                    tr: ({ ...props }) => (
+                                      <tr className="hover:bg-indigo-500/10 transition-colors even:bg-white/[0.02]" {...props} />
+                                    ),
+                                    td: ({ ...props }) => (
+                                      <td className="px-4 py-3 text-xs text-neutral-200 font-mono whitespace-nowrap" {...props} />
+                                    ),
+                                    h2: ({ ...props }) => (
+                                      <h2 className="text-base font-bold text-white mt-1 mb-2 tracking-tight flex items-center gap-2" {...props} />
+                                    ),
+                                    h3: ({ ...props }) => (
+                                      <h3 className="text-xs font-bold text-indigo-300 mt-4 mb-1.5 uppercase tracking-wider" {...props} />
+                                    ),
+                                    h4: ({ ...props }) => (
+                                      <h4 className="text-xs font-bold text-indigo-300 mt-3 mb-1" {...props} />
+                                    ),
+                                    p: ({ ...props }) => (
+                                      <p className="text-xs text-neutral-300 leading-relaxed my-1.5" {...props} />
+                                    ),
+                                    ul: ({ ...props }) => (
+                                      <ul className="list-disc list-outside pl-4 space-y-1.5 my-2 text-xs text-neutral-300" {...props} />
+                                    ),
+                                    li: ({ ...props }) => (
+                                      <li className="text-xs text-neutral-300 leading-relaxed" {...props} />
+                                    ),
+                                    strong: ({ ...props }) => (
+                                      <strong className="font-semibold text-white" {...props} />
+                                    ),
+                                  }}
+                                >
+                                  {sanitizedContent}
+                                </ReactMarkdown>
+                              </div>
+                            );
+                          }
+
+                          // Only render the spinner if we are actively generating for THIS message
+                          if (loading && msg.id === activeAssistantId) {
+                            return (
+                              <div className="p-5 rounded-2xl bg-black/75 border border-white/15 shadow-2xl backdrop-blur-xl">
+                                <div className="flex items-center gap-2.5 text-neutral-400 font-mono text-xs py-1">
+                                  <RefreshCw className="w-4 h-4 animate-spin text-indigo-400" />
+                                  <span>Synthesizing verified query results & auto-visualization...</span>
+                                </div>
+                              </div>
+                            );
+                          }
+
+                          // If request finished/stopped and there is no content, render a graceful notice
+                          return (
+                            <div className="p-5 sm:p-6 rounded-2xl bg-gradient-to-b from-amber-950/30 to-black/85 border border-amber-500/30 shadow-2xl backdrop-blur-xl text-neutral-200">
+                              <div className="flex items-start gap-3.5">
+                                <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0 mt-0.5 shadow-lg shadow-amber-950/50">
+                                  <AlertCircle className="w-4 h-4" />
+                                </div>
+                                <div className="space-y-2.5 flex-1 min-w-0">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <h4 className="text-xs font-bold text-amber-300 uppercase tracking-wider font-mono">
+                                      Query Synthesis Interrupted
+                                    </h4>
+                                    <span className="text-[9px] font-mono text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                                      No Response
+                                    </span>
+                                  </div>
+                                  <p className="text-xs text-neutral-300 leading-relaxed">
+                                    No response was returned for this query. The upstream AI provider may be temporarily rate-limited or the network stream ended prematurely.
+                                  </p>
+                                  <div className="pt-2 flex flex-wrap items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const prevUserMsg = messages
+                                          .slice(0, index)
+                                          .reverse()
+                                          .find((m: ChatMessage) => m.role === "user");
+                                        if (prevUserMsg) {
+                                          handleQuickPrompt(prevUserMsg.content);
+                                        }
+                                      }}
+                                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-200 hover:text-white text-xs font-medium transition-all shadow-sm cursor-pointer"
+                                    >
+                                      <RefreshCw className="w-3.5 h-3.5" />
+                                      <span>Retry Query</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
                             </div>
-                          )}
-                        </div>
+                          );
+                        })()}
 
                         {/* Assistant Actions */}
                         <div className="flex items-center justify-between px-1 text-[10px] text-neutral-500 font-mono">
@@ -929,6 +1175,13 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
           </div>
         </div>
       </div>
+
+      {/* Pin Widget Modal (FR-12) */}
+      <PinWidgetModal
+        isOpen={!!pinTargetWidget}
+        onClose={() => setPinTargetWidget(null)}
+        widget={pinTargetWidget}
+      />
     </div>
   );
 }
