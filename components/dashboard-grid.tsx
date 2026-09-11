@@ -19,6 +19,7 @@ import {
   ChevronDown,
   Check,
   AlertCircle,
+  FileDown,
 } from "lucide-react";
 import Link from "next/link";
 import DynamicDataVisualizer, { ChartType, ChartConfig } from "@/components/dynamic-data-visualizer";
@@ -28,6 +29,7 @@ import {
   refreshWidgetData,
   createDashboard,
 } from "@/app/actions/dashboard";
+import { exportDashboardToPdf } from "@/lib/export-utils";
 
 interface WidgetRecord {
   id: string;
@@ -71,8 +73,10 @@ export default function DashboardGrid({
   const [isCreatingDash, setIsCreatingDash] = useState(false);
   const [newDashName, setNewDashName] = useState("");
   const [isSavingDash, setIsSavingDash] = useState(false);
+  const [isExportingDashboard, setIsExportingDashboard] = useState(false);
   const [saveLayoutNotice, setSaveLayoutNotice] = useState(false);
   const layoutSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const dashboardExportRef = useRef<HTMLDivElement>(null);
 
   // Initialize sample / fallback data for widgets on mount
   useEffect(() => {
@@ -186,6 +190,33 @@ export default function DashboardGrid({
     }
   };
 
+  // Export whole dashboard to PDF report
+  const handleExportDashboardPdf = async () => {
+    const el = dashboardExportRef.current || containerRef.current;
+    if (!el) {
+      alert("Dashboard container not available for export.");
+      return;
+    }
+    setIsExportingDashboard(true);
+    try {
+      await exportDashboardToPdf(el, {
+        dashboardName: currentDashboard.name,
+        description: currentDashboard.description,
+        widgets: widgets.map((w) => ({
+          id: w.id,
+          title: w.title,
+          description: w.description,
+          chartType: w.chartType,
+        })),
+        widgetDataMap,
+      });
+    } catch (err) {
+      console.error("Dashboard PDF export error:", err);
+    } finally {
+      setIsExportingDashboard(false);
+    }
+  };
+
   return (
     <div className="flex-1 flex flex-col h-full overflow-y-auto bg-[#090d16] text-white p-4 sm:p-6 space-y-6">
       {/* Top Header Bar */}
@@ -243,6 +274,29 @@ export default function DashboardGrid({
             <Plus className="w-3.5 h-3.5 text-indigo-400" />
             <span className="hidden sm:inline">New Dashboard</span>
           </button>
+
+          {/* Export Dashboard PDF Report Button */}
+          {widgets.length > 0 && (
+            <button
+              type="button"
+              onClick={handleExportDashboardPdf}
+              disabled={isExportingDashboard}
+              className="px-3 py-2 rounded-xl bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/30 text-xs text-purple-200 hover:text-white flex items-center gap-1.5 transition-all cursor-pointer font-medium disabled:opacity-50"
+              title="Export the entire dashboard as a professional PDF report"
+            >
+              {isExportingDashboard ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 text-purple-400 animate-spin" />
+                  <span>Exporting PDF...</span>
+                </>
+              ) : (
+                <>
+                  <FileDown className="w-3.5 h-3.5 text-purple-400" />
+                  <span>Export Report (PDF)</span>
+                </>
+              )}
+            </button>
+          )}
 
           {/* Query Console Link */}
           <Link
@@ -310,9 +364,10 @@ export default function DashboardGrid({
         </div>
       ) : (
         /* Draggable & Resizable Grid (FR-12) */
-        <div ref={containerRef} className="w-full">
-          {mounted && (
-            <ResponsiveGridLayout
+        <div ref={dashboardExportRef} className="w-full">
+          <div ref={containerRef} className="w-full">
+            {mounted && (
+              <ResponsiveGridLayout
               width={width}
               className="layout"
               layouts={layouts}
@@ -407,7 +462,8 @@ export default function DashboardGrid({
             );
           })}
         </ResponsiveGridLayout>
-          )}
+            )}
+          </div>
         </div>
       )}
     </div>

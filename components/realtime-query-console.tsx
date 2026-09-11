@@ -51,7 +51,7 @@ function parseVisualizationPayload(content: string): ParsedVisualization | null 
     if (parsed && typeof parsed === "object" && Array.isArray(parsed.data)) {
       return parsed as ParsedVisualization;
     }
-  } catch {}
+  } catch { }
 
   // 2. Extract from markdown code fences or JSON boundary
   const jsonMatch =
@@ -64,7 +64,7 @@ function parseVisualizationPayload(content: string): ParsedVisualization | null 
       if (candidate && typeof candidate === "object" && Array.isArray(candidate.data)) {
         return candidate as ParsedVisualization;
       }
-    } catch {}
+    } catch { }
   }
 
   return null;
@@ -302,8 +302,8 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
     const clientStartTime = Date.now();
     const abortController = new AbortController();
     const timeoutId = setTimeout(() => {
-      abortController.abort("Query timed out after 45 seconds");
-    }, 45000);
+      abortController.abort("Query timed out after 120 seconds");
+    }, 120000);
 
     console.log(
       "%c[DataBridge AI Console]%c Submitting query to /api/chat:",
@@ -361,12 +361,12 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
             prev.map((msg) =>
               msg.id === assistantMsgId
                 ? {
-                    ...msg,
-                    content: accumulated,
-                    connectionId: connectionIdHeader,
-                    rawQuery: rawQueryHeader,
-                    isError: false,
-                  }
+                  ...msg,
+                  content: accumulated,
+                  connectionId: connectionIdHeader,
+                  rawQuery: rawQueryHeader,
+                  isError: false,
+                }
                 : msg
             )
           );
@@ -384,12 +384,12 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
       console.log(`[DataBridge AI Console] ✅ Response stream completed in ${Date.now() - clientStartTime}ms (${accumulated.length} chars).`);
     } catch (err: unknown) {
       clearTimeout(timeoutId);
-      const isAbort = err === "Query timed out after 45 seconds" || (err instanceof Error && err.name === "AbortError");
+      const isAbort = err === "Query timed out after 120 seconds" || (err instanceof Error && err.name === "AbortError");
       const errText = isAbort
-        ? "The query request timed out after 45 seconds. The database query or AI synthesis took too long to complete."
+        ? "The query request timed out after 120 seconds. The database query or AI synthesis took too long to complete."
         : err instanceof Error
-        ? err.message
-        : "Failed to execute query.";
+          ? err.message
+          : "Failed to execute query.";
 
       console.error(`[DataBridge AI Console] ❌ Error in chat query after ${Date.now() - clientStartTime}ms:`, err);
       setError(errText);
@@ -398,11 +398,11 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
         prev.map((msg) =>
           msg.id === assistantMsgId
             ? {
-                ...msg,
-                content: `⚠️ **Query Processing Notice**\n\n${errText}\n\n*Suggestion:* Check your database connection status or click **Retry Query** below.`,
-                isError: true,
-                errorMessage: errText,
-              }
+              ...msg,
+              content: `⚠️ **Query Processing Notice**\n\n${errText}\n\n*Suggestion:* Check your database connection status or click **Retry Query** below.`,
+              isError: true,
+              errorMessage: errText,
+            }
             : msg
         )
       );
@@ -469,13 +469,12 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
                 {selectedConnIds.length === connections.length
                   ? `All Databases (${connections.length})`
                   : selectedConnIds.length === 1
-                  ? selectedConnectionNames[0]
-                  : `${selectedConnIds.length} Databases Selected`}
+                    ? selectedConnectionNames[0]
+                    : `${selectedConnIds.length} Databases Selected`}
               </span>
               <ChevronDown
-                className={`w-3.5 h-3.5 text-neutral-400 transition-transform duration-200 ${
-                  dropdownOpen ? "rotate-180" : ""
-                }`}
+                className={`w-3.5 h-3.5 text-neutral-400 transition-transform duration-200 ${dropdownOpen ? "rotate-180" : ""
+                  }`}
               />
             </button>
 
@@ -502,11 +501,10 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
                         key={conn.id}
                         type="button"
                         onClick={() => handleToggleConnection(conn.id)}
-                        className={`w-full flex items-center justify-between p-2 rounded-xl text-left text-xs transition-colors cursor-pointer ${
-                          isSelected
-                            ? "bg-indigo-600/20 text-white border border-indigo-500/40 shadow-sm"
-                            : "hover:bg-white/5 text-neutral-300 border border-transparent"
-                        }`}
+                        className={`w-full flex items-center justify-between p-2 rounded-xl text-left text-xs transition-colors cursor-pointer ${isSelected
+                          ? "bg-indigo-600/20 text-white border border-indigo-500/40 shadow-sm"
+                          : "hover:bg-white/5 text-neutral-300 border border-transparent"
+                          }`}
                       >
                         <div className="flex items-center gap-2 min-w-0 pr-2">
                           {isSelected ? (
@@ -536,11 +534,10 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
           <button
             type="button"
             onClick={() => setChatMenuOpen(!chatMenuOpen)}
-            className={`px-3 py-1.5 rounded-xl border text-xs flex items-center gap-1.5 transition-all cursor-pointer shadow-md backdrop-blur-md ${
-              chatMenuOpen
-                ? "bg-indigo-600/30 border-indigo-500/50 text-white"
-                : "bg-black/60 border-white/15 hover:border-white/25 text-neutral-300 hover:text-white"
-            }`}
+            className={`px-3 py-1.5 rounded-xl border text-xs flex items-center gap-1.5 transition-all cursor-pointer shadow-md backdrop-blur-md ${chatMenuOpen
+              ? "bg-indigo-600/30 border-indigo-500/50 text-white"
+              : "bg-black/60 border-white/15 hover:border-white/25 text-neutral-300 hover:text-white"
+              }`}
             title="Conversation Timeline & History"
           >
             <AlignRight className="w-3.5 h-3.5 text-indigo-400" />
@@ -619,9 +616,8 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
                 <div
                   id={msg.id}
                   key={msg.id}
-                  className={`flex gap-3 max-w-5xl transition-all duration-300 rounded-2xl p-1 ${
-                    isUser ? "ml-auto justify-end" : "mr-auto"
-                  }`}
+                  className={`flex gap-3 max-w-5xl transition-all duration-300 rounded-2xl p-1 ${isUser ? "ml-auto justify-end" : "mr-auto"
+                    }`}
                 >
                   {!isUser && (
                     <div className="w-8 h-8 rounded-xl bg-indigo-600/30 border border-indigo-500/40 flex items-center justify-center text-indigo-300 shrink-0 mt-0.5 shadow-md">
@@ -974,11 +970,10 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
                       onClick={() => scrollToMessage(msg.id)}
                       onMouseEnter={() => setHoveredMsgId(msg.id)}
                       onMouseLeave={() => setHoveredMsgId(null)}
-                      className={`block rounded-full transition-all duration-200 cursor-pointer ${
-                        isUser
-                          ? "w-3 h-1 bg-indigo-400/80 hover:w-5 hover:bg-indigo-300"
-                          : "w-2 h-0.5 bg-neutral-600 hover:w-4 hover:bg-emerald-400"
-                      } ${isHovered ? "ring-2 ring-indigo-400/50" : ""}`}
+                      className={`block rounded-full transition-all duration-200 cursor-pointer ${isUser
+                        ? "w-3 h-1 bg-indigo-400/80 hover:w-5 hover:bg-indigo-300"
+                        : "w-2 h-0.5 bg-neutral-600 hover:w-4 hover:bg-emerald-400"
+                        } ${isHovered ? "ring-2 ring-indigo-400/50" : ""}`}
                       title={`${isUser ? "User Query" : "AI Briefing"}: ${snippet}`}
                     />
 
@@ -1044,11 +1039,10 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
                       scrollToMessage(m.id);
                       setChatMenuOpen(false);
                     }}
-                    className={`w-full p-2.5 rounded-xl text-left text-xs transition-all border cursor-pointer ${
-                      isUser
-                        ? "bg-indigo-600/15 hover:bg-indigo-600/25 border-indigo-500/30 text-neutral-200"
-                        : "bg-neutral-900/40 hover:bg-neutral-900/70 border-white/5 text-neutral-400 hover:text-neutral-200"
-                    }`}
+                    className={`w-full p-2.5 rounded-xl text-left text-xs transition-all border cursor-pointer ${isUser
+                      ? "bg-indigo-600/15 hover:bg-indigo-600/25 border-indigo-500/30 text-neutral-200"
+                      : "bg-neutral-900/40 hover:bg-neutral-900/70 border-white/5 text-neutral-400 hover:text-neutral-200"
+                      }`}
                   >
                     <div className="flex items-center justify-between text-[10px] font-mono text-neutral-500 mb-1">
                       <span className={`font-semibold ${isUser ? "text-indigo-400" : "text-emerald-400"}`}>
@@ -1101,11 +1095,10 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
               setPrompt(e.target.value);
               adjustHeight();
             }}
-            placeholder={`Ask anything across ${
-              selectedConnIds.length === 1
-                ? selectedConnectionNames[0] || "database"
-                : `${selectedConnIds.length} connected databases`
-            }... (e.g. "Who are our top customers?" or "Compare sales by region")`}
+            placeholder={`Ask anything across ${selectedConnIds.length === 1
+              ? selectedConnectionNames[0] || "database"
+              : `${selectedConnIds.length} connected databases`
+              }... (e.g. "Who are our top customers?" or "Compare sales by region")`}
             className={cn(
               "w-full px-4 py-3 resize-none border-none",
               "bg-transparent text-white text-xs sm:text-sm",
@@ -1142,8 +1135,8 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
                   {selectedConnIds.length === connections.length
                     ? `All (${connections.length})`
                     : selectedConnIds.length === 1
-                    ? selectedConnectionNames[0]
-                    : `${selectedConnIds.length} DBs`}
+                      ? selectedConnectionNames[0]
+                      : `${selectedConnIds.length} DBs`}
                 </span>
               </span>
             </div>
