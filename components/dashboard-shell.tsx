@@ -26,7 +26,7 @@ export default async function DashboardShell({ children }: DashboardShellProps) 
 
   return (
     <QuerySessionProvider userId={session.user.id} orgId={user.orgId}>
-      <div className="flex h-screen w-screen overflow-hidden bg-[#090d16]">
+      <div className="flex h-screen w-screen overflow-hidden bg-[#09090B]">
         <Sidebar user={user} />
         <div className="flex flex-col flex-1 min-w-0 h-screen overflow-hidden">
           <Header user={user} />

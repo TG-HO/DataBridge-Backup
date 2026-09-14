@@ -75,10 +75,10 @@ export default function PwaStatus() {
     <div className="flex items-center gap-2">
       {/* Network / SW Badge */}
       <div
-        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
+        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-[6px] text-xs font-medium border transition-colors ${
           isOnline
-            ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
-            : "bg-amber-500/10 border-amber-500/20 text-amber-400"
+            ? "bg-[#00E599]/10 border-[#00E599]/20 text-[#00E599]"
+            : "bg-[#F59E0B]/10 border-[#F59E0B]/20 text-[#F59E0B]"
         }`}
       >
         {isOnline ? (
@@ -88,8 +88,8 @@ export default function PwaStatus() {
         )}
         <span>{isOnline ? "Online" : "Offline (Cached)"}</span>
         {swRegistered && (
-          <span className="flex items-center gap-1 text-[10px] pl-1 border-l border-white/10 text-slate-400">
-            <ShieldCheck className="w-3 h-3 text-indigo-400" />
+          <span className="flex items-center gap-1 text-[10px] pl-1 border-l border-[rgba(255,255,255,0.08)] text-[#A1A1AA]">
+            <ShieldCheck className="w-3 h-3 text-[#00E599]" />
             SW Active
           </span>
         )}
@@ -99,7 +99,7 @@ export default function PwaStatus() {
       {deferredPrompt && (
         <button
           onClick={handleInstallClick}
-          className="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-indigo-600 hover:bg-indigo-500 text-white border border-indigo-500/30 shadow-sm transition-all"
+          className="flex items-center gap-1 px-2.5 py-1 rounded-[6px] text-xs font-semibold bg-[#00E599] hover:bg-[#00E599]/90 text-[#09090B] shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)] transition-all cursor-pointer"
         >
           <Download className="w-3.5 h-3.5" />
           <span>Install App</span>

@@ -108,16 +108,16 @@ export default function PinWidgetModal({ isOpen, onClose, widget }: PinWidgetMod
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-150">
-      <div className="relative w-full max-w-md p-6 rounded-3xl bg-slate-950 border border-white/15 shadow-2xl text-white space-y-5">
+      <div className="relative w-full max-w-md p-6 rounded-[10px] bg-[#121215] border border-white/[0.08] shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)] text-[#FAFAFA] space-y-5">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-white/10 pb-3">
+        <div className="flex items-center justify-between border-b border-white/[0.08] pb-3">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
+            <div className="w-8 h-8 rounded-[6px] bg-[#00E599]/15 border border-[#00E599]/30 flex items-center justify-center text-[#00E599]">
               <Pin className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="text-sm font-bold tracking-tight">Pin to Dashboard</h3>
-              <p className="text-[11px] text-neutral-400">
+              <h3 className="text-sm font-bold tracking-tight text-[#FAFAFA]">Pin to Dashboard</h3>
+              <p className="text-[11px] text-[#A1A1AA] font-mono">
                 Add this {widget.chartType} chart to an organization workspace
               </p>
             </div>
@@ -125,7 +125,7 @@ export default function PinWidgetModal({ isOpen, onClose, widget }: PinWidgetMod
           <button
             type="button"
             onClick={onClose}
-            className="p-1 rounded-lg text-neutral-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+            className="p-1 rounded-[6px] text-[#A1A1AA] hover:text-[#FAFAFA] hover:bg-[#18181B] transition-colors cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
@@ -136,19 +136,19 @@ export default function PinWidgetModal({ isOpen, onClose, widget }: PinWidgetMod
           {/* Dashboard Selection */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
-              <label className="font-semibold text-slate-300">Target Dashboard</label>
+              <label className="font-semibold text-[#FAFAFA]">Target Dashboard</label>
               <button
                 type="button"
                 onClick={() => setIsCreatingNew(!isCreatingNew)}
-                className="text-[11px] text-indigo-400 hover:text-indigo-300 transition-colors cursor-pointer flex items-center gap-1 font-medium"
+                className="text-[11px] text-[#00E599] hover:text-[#00E599]/80 transition-colors cursor-pointer flex items-center gap-1 font-medium font-mono"
               >
                 {isCreatingNew ? "Select Existing" : "+ New Dashboard"}
               </button>
             </div>
 
             {loading ? (
-              <div className="flex items-center gap-2 p-2.5 rounded-xl bg-white/5 border border-white/10 text-neutral-400">
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              <div className="flex items-center gap-2 p-2.5 rounded-[6px] bg-[#18181B] border border-white/[0.08] text-[#A1A1AA]">
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-[#00E599]" />
                 <span>Loading dashboards...</span>
               </div>
             ) : isCreatingNew ? (
@@ -157,16 +157,16 @@ export default function PinWidgetModal({ isOpen, onClose, widget }: PinWidgetMod
                 placeholder="e.g. Q3 Sales & Executive KPI"
                 value={newDashboardName}
                 onChange={(e) => setNewDashboardName(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-black/60 border border-white/15 text-white placeholder-neutral-500 focus:outline-none focus:border-indigo-500 font-sans"
+                className="w-full px-3.5 py-2.5 rounded-[6px] bg-[#18181B] border border-white/[0.08] text-[#FAFAFA] placeholder:text-[#A1A1AA] focus:outline-none focus:border-[#00E599]/60 font-sans"
               />
             ) : (
               <select
                 value={selectedDashboardId}
                 onChange={(e) => setSelectedDashboardId(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-black/60 border border-white/15 text-white focus:outline-none focus:border-indigo-500 font-sans cursor-pointer"
+                className="w-full px-3.5 py-2.5 rounded-[6px] bg-[#18181B] border border-white/[0.08] text-[#FAFAFA] focus:outline-none focus:border-[#00E599]/60 font-sans cursor-pointer"
               >
                 {dashboards.map((dash) => (
-                  <option key={dash.id} value={dash.id} className="bg-slate-900 text-white">
+                  <option key={dash.id} value={dash.id} className="bg-[#18181B] text-[#FAFAFA]">
                     {dash.name}
                   </option>
                 ))}
@@ -176,44 +176,44 @@ export default function PinWidgetModal({ isOpen, onClose, widget }: PinWidgetMod
 
           {/* Widget Title */}
           <div>
-            <label className="block font-semibold text-slate-300 mb-1.5">Widget Title</label>
+            <label className="block font-semibold text-[#FAFAFA] mb-1.5">Widget Title</label>
             <input
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="e.g. Top 10 Customers by Revenue"
-              className="w-full px-3.5 py-2.5 rounded-xl bg-black/60 border border-white/15 text-white placeholder-neutral-500 focus:outline-none focus:border-indigo-500 font-sans"
+              className="w-full px-3.5 py-2.5 rounded-[6px] bg-[#18181B] border border-white/[0.08] text-[#FAFAFA] placeholder:text-[#A1A1AA] focus:outline-none focus:border-[#00E599]/60 font-sans"
             />
           </div>
 
           {/* Widget Description (Optional) */}
           <div>
-            <label className="block font-semibold text-slate-300 mb-1.5">
-              Description <span className="text-neutral-500 font-normal">(Optional)</span>
+            <label className="block font-semibold text-[#FAFAFA] mb-1.5">
+              Description <span className="text-[#A1A1AA] font-normal">(Optional)</span>
             </label>
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               rows={2}
               placeholder="Brief summary or context for this metric..."
-              className="w-full px-3.5 py-2 rounded-xl bg-black/60 border border-white/15 text-white placeholder-neutral-500 focus:outline-none focus:border-indigo-500 font-sans resize-none"
+              className="w-full px-3.5 py-2 rounded-[6px] bg-[#18181B] border border-white/[0.08] text-[#FAFAFA] placeholder:text-[#A1A1AA] focus:outline-none focus:border-[#00E599]/60 font-sans resize-none"
             />
           </div>
 
           {/* Query Preview Badge */}
           {widget.rawQuery && (
-            <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/5 text-[11px] font-mono text-neutral-400 truncate">
-              <span className="text-neutral-500 block text-[9px] uppercase font-bold">
+            <div className="p-2.5 rounded-[6px] bg-[#18181B] border border-white/[0.08] text-[11px] font-mono text-[#A1A1AA] truncate">
+              <span className="text-[#A1A1AA]/60 block text-[9px] uppercase font-bold">
                 Stored Executable Query:
               </span>
-              <span className="text-indigo-300 truncate block">{widget.rawQuery}</span>
+              <span className="text-[#00E599] truncate block">{widget.rawQuery}</span>
             </div>
           )}
 
           {/* Toast feedback */}
           {toast && (
             <div
-              className={`p-3 rounded-xl border text-xs flex items-center gap-2 ${
+              className={`p-3 rounded-[6px] border text-xs flex items-center gap-2 ${
                 toast.type === "success"
                   ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300"
                   : "bg-rose-500/15 border-rose-500/30 text-rose-300"
@@ -230,11 +230,11 @@ export default function PinWidgetModal({ isOpen, onClose, widget }: PinWidgetMod
         </div>
 
         {/* Footer Actions */}
-        <div className="flex items-center justify-between pt-2 border-t border-white/10">
+        <div className="flex items-center justify-between pt-2 border-t border-white/[0.08]">
           <Link
             href="/dashboard"
             onClick={onClose}
-            className="text-[11px] text-neutral-400 hover:text-white flex items-center gap-1 transition-colors"
+            className="text-[11px] text-[#A1A1AA] hover:text-[#FAFAFA] flex items-center gap-1 transition-colors"
           >
             <LayoutDashboard className="w-3.5 h-3.5" />
             <span>Go to Dashboard</span>
@@ -245,7 +245,7 @@ export default function PinWidgetModal({ isOpen, onClose, widget }: PinWidgetMod
               type="button"
               onClick={onClose}
               disabled={saving}
-              className="px-4 py-2 rounded-xl border border-white/10 hover:bg-white/5 text-xs text-neutral-300 transition-colors cursor-pointer"
+              className="px-4 py-2 rounded-[6px] border border-white/[0.08] bg-[#18181B] hover:bg-[#27272A] text-xs text-[#FAFAFA] transition-colors cursor-pointer"
             >
               Cancel
             </button>
@@ -253,7 +253,7 @@ export default function PinWidgetModal({ isOpen, onClose, widget }: PinWidgetMod
               type="button"
               onClick={handlePin}
               disabled={saving}
-              className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold shadow-lg shadow-indigo-600/30 flex items-center gap-2 transition-all cursor-pointer"
+              className="px-5 py-2 rounded-[6px] bg-[#00E599] hover:bg-[#00E599]/90 disabled:opacity-50 text-[#09090B] text-xs font-semibold shadow-sm flex items-center gap-2 transition-all cursor-pointer"
             >
               {saving ? (
                 <>

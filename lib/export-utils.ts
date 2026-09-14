@@ -101,7 +101,7 @@ export async function exportToPdf(
       scale: 2,
       useCORS: true,
       logging: false,
-      backgroundColor: "#090d16",
+      backgroundColor: "#09090B",
     });
 
     const imgData = canvas.toDataURL("image/png");
@@ -120,7 +120,7 @@ export async function exportToPdf(
     let currentY = margin;
 
     // Header Background Accent Bar
-    doc.setFillColor(99, 102, 241); // Indigo-500
+    doc.setFillColor(0, 229, 153); // Supabase Emerald (#00E599)
     doc.rect(margin, currentY, contentWidth, 4, "F");
     currentY += 16;
 
@@ -287,7 +287,7 @@ export async function exportDashboardToPdf(
       scale: 2,
       useCORS: true,
       logging: false,
-      backgroundColor: "#090d16",
+      backgroundColor: "#09090B",
       onclone: (clonedDoc) => {
         // Hide interactive buttons, drag handles, delete icons from export
         const elementsToHide = clonedDoc.querySelectorAll(".drag-handle, button, select");
@@ -311,7 +311,7 @@ export async function exportDashboardToPdf(
     let currentY = margin;
 
     // Header Accent Bar
-    doc.setFillColor(99, 102, 241); // Indigo-500
+    doc.setFillColor(0, 229, 153); // Supabase Emerald (#00E599)
     doc.rect(margin, currentY, contentWidth, 4, "F");
     currentY += 16;
 

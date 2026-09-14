@@ -218,26 +218,26 @@ export default function DashboardGrid({
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-y-auto bg-[#090d16] text-white p-4 sm:p-6 space-y-6">
+    <div className="flex-1 flex flex-col h-full overflow-y-auto bg-[#09090B] text-[#FAFAFA] p-4 sm:p-6 space-y-6">
       {/* Top Header Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-3xl bg-slate-950/70 border border-white/10 backdrop-blur-xl shadow-2xl">
+      <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-[10px] bg-[#121215] border border-white/[0.08] shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)]">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-600 to-indigo-400 flex items-center justify-center text-white shadow-lg shadow-indigo-600/30">
+          <div className="w-10 h-10 rounded-[6px] bg-gradient-to-tr from-[#00E599] to-[#10B981] flex items-center justify-center text-[#09090B] shadow-sm">
             <LayoutDashboard className="w-5 h-5" />
           </div>
 
           <div>
             <div className="flex items-center gap-2">
-              <h2 className="text-base font-bold text-white tracking-tight">
+              <h2 className="text-base font-bold text-[#FAFAFA] tracking-tight">
                 {currentDashboard.name}
               </h2>
               {saveLayoutNotice && (
-                <span className="text-[10px] font-mono font-medium px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 animate-in fade-in duration-150">
+                <span className="text-[10px] font-mono font-medium px-2 py-0.5 rounded-[4px] bg-[#00E599]/15 text-[#00E599] border border-[#00E599]/30 animate-in fade-in duration-150">
                   Layout Saved
                 </span>
               )}
             </div>
-            <p className="text-xs text-neutral-400">
+            <p className="text-xs text-[#A1A1AA]">
               {currentDashboard.description || "Draggable, customizable real-time analytics grid"}
             </p>
           </div>
@@ -255,10 +255,10 @@ export default function DashboardGrid({
                   window.location.href = `/dashboard?id=${target.id}`;
                 }
               }}
-              className="px-3 py-2 rounded-xl bg-black/60 border border-white/15 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 font-sans cursor-pointer"
+              className="px-3 py-2 rounded-[6px] bg-[#18181B] border border-white/[0.08] text-xs text-[#FAFAFA] focus:outline-none focus:border-[#00E599]/60 font-sans cursor-pointer"
             >
               {dashboardsList.map((d) => (
-                <option key={d.id} value={d.id} className="bg-slate-900 text-white">
+                <option key={d.id} value={d.id} className="bg-[#18181B] text-[#FAFAFA]">
                   {d.name}
                 </option>
               ))}
@@ -269,9 +269,9 @@ export default function DashboardGrid({
           <button
             type="button"
             onClick={() => setIsCreatingDash(true)}
-            className="px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-slate-300 hover:text-white flex items-center gap-1.5 transition-all cursor-pointer font-medium"
+            className="px-3 py-2 rounded-[6px] bg-[#18181B] hover:bg-[#27272A] border border-white/[0.08] text-xs text-[#FAFAFA] flex items-center gap-1.5 transition-all cursor-pointer font-medium"
           >
-            <Plus className="w-3.5 h-3.5 text-indigo-400" />
+            <Plus className="w-3.5 h-3.5 text-[#00E599]" />
             <span className="hidden sm:inline">New Dashboard</span>
           </button>
 
@@ -281,17 +281,17 @@ export default function DashboardGrid({
               type="button"
               onClick={handleExportDashboardPdf}
               disabled={isExportingDashboard}
-              className="px-3 py-2 rounded-xl bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/30 text-xs text-purple-200 hover:text-white flex items-center gap-1.5 transition-all cursor-pointer font-medium disabled:opacity-50"
+              className="px-3 py-2 rounded-[6px] bg-[#8B5CF6]/15 hover:bg-[#8B5CF6]/25 border border-[#8B5CF6]/30 text-xs text-[#8B5CF6] hover:text-white flex items-center gap-1.5 transition-all cursor-pointer font-medium disabled:opacity-50"
               title="Export the entire dashboard as a professional PDF report"
             >
               {isExportingDashboard ? (
                 <>
-                  <RefreshCw className="w-3.5 h-3.5 text-purple-400 animate-spin" />
+                  <RefreshCw className="w-3.5 h-3.5 text-[#8B5CF6] animate-spin" />
                   <span>Exporting PDF...</span>
                 </>
               ) : (
                 <>
-                  <FileDown className="w-3.5 h-3.5 text-purple-400" />
+                  <FileDown className="w-3.5 h-3.5 text-[#8B5CF6]" />
                   <span>Export Report (PDF)</span>
                 </>
               )}
@@ -301,7 +301,7 @@ export default function DashboardGrid({
           {/* Query Console Link */}
           <Link
             href="/"
-            className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white shadow-lg shadow-indigo-600/30 flex items-center gap-1.5 transition-all"
+            className="px-3.5 py-2 rounded-[6px] bg-[#00E599] hover:bg-[#00E599]/90 text-xs font-semibold text-[#09090B] shadow-sm flex items-center gap-1.5 transition-all"
           >
             <Sparkles className="w-3.5 h-3.5" />
             <span>Query Console</span>
@@ -311,26 +311,26 @@ export default function DashboardGrid({
 
       {/* New Dashboard Modal / Prompt */}
       {isCreatingDash && (
-        <div className="p-4 rounded-2xl bg-slate-900/90 border border-indigo-500/30 shadow-xl flex flex-wrap items-center gap-3 animate-in fade-in duration-100">
+        <div className="p-4 rounded-[10px] bg-[#121215] border border-white/[0.08] shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)] flex flex-wrap items-center gap-3 animate-in fade-in duration-100">
           <input
             type="text"
             placeholder="New Dashboard Name..."
             value={newDashName}
             onChange={(e) => setNewDashName(e.target.value)}
-            className="flex-1 min-w-[220px] px-3.5 py-2 rounded-xl bg-black/60 border border-white/15 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+            className="flex-1 min-w-[220px] px-3.5 py-2 rounded-[6px] bg-[#18181B] border border-white/[0.08] text-xs text-[#FAFAFA] placeholder:text-[#A1A1AA] focus:outline-none focus:border-[#00E599]/60 font-sans"
           />
           <button
             type="button"
             onClick={handleCreateNewDashboard}
             disabled={isSavingDash || !newDashName.trim()}
-            className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-xs font-semibold text-white transition-all cursor-pointer"
+            className="px-4 py-2 rounded-[6px] bg-[#00E599] hover:bg-[#00E599]/90 disabled:opacity-50 text-xs font-semibold text-[#09090B] transition-all cursor-pointer shadow-sm"
           >
             {isSavingDash ? "Creating..." : "Create Dashboard"}
           </button>
           <button
             type="button"
             onClick={() => setIsCreatingDash(false)}
-            className="px-3 py-2 rounded-xl border border-white/10 hover:bg-white/5 text-xs text-slate-400 cursor-pointer"
+            className="px-3 py-2 rounded-[6px] border border-white/[0.08] bg-[#18181B] hover:bg-[#27272A] text-xs text-[#A1A1AA] cursor-pointer"
           >
             Cancel
           </button>
@@ -340,22 +340,22 @@ export default function DashboardGrid({
       {/* Empty State */}
       {widgets.length === 0 ? (
         <div className="flex-1 flex items-center justify-center p-8">
-          <div className="max-w-md w-full p-8 rounded-3xl bg-slate-950/60 border border-white/10 text-center space-y-4 backdrop-blur-xl shadow-2xl">
-            <div className="w-12 h-12 rounded-2xl bg-indigo-600/15 border border-indigo-500/30 flex items-center justify-center mx-auto text-indigo-400">
+          <div className="max-w-md w-full p-8 rounded-[10px] bg-[#121215] border border-white/[0.08] text-center space-y-4 shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)]">
+            <div className="w-12 h-12 rounded-[6px] bg-[#00E599]/15 border border-[#00E599]/30 flex items-center justify-center mx-auto text-[#00E599]">
               <Layers className="w-6 h-6" />
             </div>
             <div className="space-y-1">
-              <h3 className="text-base font-bold text-white tracking-tight">
+              <h3 className="text-base font-bold text-[#FAFAFA] tracking-tight">
                 No Pinned Widgets Yet
               </h3>
-              <p className="text-xs text-slate-400 leading-relaxed">
+              <p className="text-xs text-[#A1A1AA] leading-relaxed">
                 Run questions in the Query Console and click &ldquo;Pin to Dashboard&rdquo; on any
                 generated chart to build your custom business workspace.
               </p>
             </div>
             <Link
               href="/"
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition-all shadow-lg shadow-indigo-600/30"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-[6px] bg-[#00E599] hover:bg-[#00E599]/90 text-xs font-semibold text-[#09090B] transition-all shadow-sm"
             >
               <Sparkles className="w-3.5 h-3.5" />
               <span>Go to Query Console</span>
@@ -389,23 +389,23 @@ export default function DashboardGrid({
 
             return (
               <div key={widget.id} className="h-full">
-                <div className="h-full flex flex-col rounded-2xl border border-white/10 bg-slate-950/80 backdrop-blur-xl shadow-2xl overflow-hidden group">
+                <div className="h-full flex flex-col rounded-[10px] border border-white/[0.08] bg-[#121215] shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)] overflow-hidden group">
                   {/* Card Drag Header */}
-                  <div className="flex items-center justify-between px-3.5 py-2.5 bg-black/50 border-b border-white/10 shrink-0">
+                  <div className="flex items-center justify-between px-3.5 py-2.5 bg-[#18181B] border-b border-white/[0.08] shrink-0">
                     <div className="flex items-center gap-2 min-w-0 flex-1">
                       <div
-                        className="drag-handle cursor-grab active:cursor-grabbing p-1 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
+                        className="drag-handle cursor-grab active:cursor-grabbing p-1 rounded-[4px] hover:bg-white/[0.08] text-[#A1A1AA] hover:text-[#FAFAFA] transition-colors"
                         title="Drag to reposition widget"
                       >
                         <GripVertical className="w-3.5 h-3.5" />
                       </div>
 
                       <div className="truncate min-w-0">
-                        <h4 className="text-xs font-bold text-white tracking-tight truncate">
+                        <h4 className="text-xs font-bold text-[#FAFAFA] tracking-tight truncate">
                           {widget.title}
                         </h4>
                         {refreshNotice && (
-                          <span className="text-[9px] text-slate-400 font-mono block truncate">
+                          <span className="text-[9px] text-[#A1A1AA] font-mono block truncate">
                             {refreshNotice}
                           </span>
                         )}
@@ -414,7 +414,7 @@ export default function DashboardGrid({
 
                     {/* Card Actions */}
                     <div className="flex items-center gap-1 shrink-0">
-                      <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-white/5 text-indigo-300 border border-white/10 uppercase">
+                      <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-[4px] bg-[#121215] text-[#00E599] border border-white/[0.08] uppercase">
                         {widget.chartType}
                       </span>
 
@@ -423,11 +423,11 @@ export default function DashboardGrid({
                         type="button"
                         onClick={() => handleRefreshWidget(widget.id)}
                         disabled={isRefreshing}
-                        className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                        className="p-1 rounded-[4px] text-[#A1A1AA] hover:text-[#FAFAFA] hover:bg-white/[0.08] transition-colors cursor-pointer"
                         title="Re-run query against target database connection"
                       >
                         <RefreshCw
-                          className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin text-indigo-400" : ""}`}
+                          className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin text-[#00E599]" : ""}`}
                         />
                       </button>
 
@@ -435,7 +435,7 @@ export default function DashboardGrid({
                       <button
                         type="button"
                         onClick={() => handleDeleteWidget(widget.id)}
-                        className="p-1 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
+                        className="p-1 rounded-[4px] text-[#A1A1AA] hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
                         title="Remove widget"
                       >
                         <Trash2 className="w-3.5 h-3.5" />

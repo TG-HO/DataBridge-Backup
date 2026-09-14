@@ -2,20 +2,42 @@
 @import "react-grid-layout/css/styles.css";
 @import "react-resizable/css/styles.css";
 
+@theme {
+  --font-sans: var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: var(--font-mono), "JetBrains Mono", monospace;
+
+  --color-canvas: #09090B;
+  --color-card: #121215;
+  --color-card-surface: #121215;
+  --color-input-surface: #18181B;
+  --color-accent-emerald: #00E599;
+  --color-accent-emerald-dark: #10B981;
+  --color-text-primary: #FAFAFA;
+  --color-text-muted: #A1A1AA;
+}
+
 :root {
-  --background: #090d16;
-  --foreground: #f1f5f9;
-  --card: #0f172a;
+  --background: #09090B;
+  --foreground: #FAFAFA;
+  --card: #121215;
+  --card-surface: #121215;
   --card-border: rgba(255, 255, 255, 0.08);
-  --primary: #6366f1;
-  --primary-hover: #4f46e5;
-  --accent: #8b5cf6;
+  --border: rgba(255, 255, 255, 0.08);
+  --input: #18181B;
+  --input-surface: #18181B;
+  --primary: #00E599;
+  --primary-emerald: #10B981;
+  --text-primary: #FAFAFA;
+  --text-muted: #A1A1AA;
+  --radius-card: 10px;
+  --radius-control: 6px;
+  --shadow-fintech: 0 8px 24px -4px rgba(0, 0, 0, 0.45);
 }
 
 body {
   background-color: var(--background);
   color: var(--foreground);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   overflow-x: hidden;
 }
 
@@ -30,24 +52,43 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.12);
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.22);
+}
+
+/* High-contrast fintech surfaces and elevation */
+.fintech-card {
+  background-color: #121215;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.45);
+}
+
+.fintech-input {
+  background-color: #18181B;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  color: #FAFAFA;
+}
+
+.fintech-shadow {
+  box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.45);
 }
 
 /* Glassmorphism helpers */
 .glass-panel {
-  background: rgba(15, 23, 42, 0.75);
+  background: rgba(18, 18, 21, 0.85);
   backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .glass-panel-subtle {
-  background: rgba(30, 41, 59, 0.4);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(24, 24, 27, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .glass-card-hover {
@@ -55,7 +96,7 @@ body {
 }
 
 .glass-card-hover:hover {
-  border-color: rgba(99, 102, 241, 0.4);
+  border-color: rgba(0, 229, 153, 0.35);
   transform: translateY(-2px);
-  box-shadow: 0 10px 25px -5px rgba(99, 102, 241, 0.1);
+  box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.45);
 }

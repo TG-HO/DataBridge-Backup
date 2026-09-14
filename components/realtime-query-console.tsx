@@ -434,22 +434,22 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
       }}
     >
       {/* Dark Cosmos Overlay for Contrast & Readability */}
-      <div className="absolute inset-0 bg-[#090d16]/80 backdrop-blur-[1px] pointer-events-none" />
+      <div className="absolute inset-0 bg-[#09090B]/90 backdrop-blur-[1px] pointer-events-none" />
 
       {/* Top Header & Controls */}
-      <div className="relative z-20 px-4 sm:px-6 py-3 border-b border-white/10 bg-black/50 backdrop-blur-xl flex flex-wrap items-center justify-between gap-3 shrink-0 shadow-lg">
+      <div className="relative z-20 px-4 sm:px-6 py-3 border-b border-white/[0.08] bg-[#121215]/90 backdrop-blur-xl flex flex-wrap items-center justify-between gap-3 shrink-0 shadow-sm">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-indigo-400 flex items-center justify-center text-white shadow-lg shadow-indigo-600/30">
+          <div className="w-8 h-8 rounded-[6px] bg-gradient-to-tr from-[#00E599] to-[#10B981] flex items-center justify-center text-[#09090B] shadow-sm">
             <Sparkles className="w-4 h-4 animate-pulse" />
           </div>
           <div>
-            <h3 className="text-sm font-bold text-white tracking-tight flex items-center gap-2">
+            <h3 className="text-sm font-bold text-[#FAFAFA] tracking-tight flex items-center gap-2">
               <span>DataBridge AI</span>
-              <span className="text-[10px] font-mono font-medium px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
-                Moon Console
+              <span className="text-[10px] font-mono font-medium px-2 py-0.5 rounded-[4px] bg-[#00E599]/15 text-[#00E599] border border-[#00E599]/30">
+                Console
               </span>
             </h3>
-            <p className="text-[11px] text-neutral-400 truncate max-w-sm">
+            <p className="text-[11px] text-[#A1A1AA] truncate max-w-sm font-mono">
               {activeSession?.title || "Multi-database natural language query engine"}
             </p>
           </div>
@@ -462,9 +462,9 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
             <button
               type="button"
               onClick={() => setDropdownOpen(!dropdownOpen)}
-              className="px-3 py-1.5 rounded-xl bg-black/60 border border-white/15 hover:border-indigo-500/50 text-xs text-neutral-200 hover:text-white transition-all flex items-center gap-2 cursor-pointer shadow-md backdrop-blur-md"
+              className="px-3 py-1.5 rounded-[6px] bg-[#18181B] border border-white/[0.08] hover:border-[#00E599]/50 text-xs text-[#FAFAFA] transition-all flex items-center gap-2 cursor-pointer shadow-sm"
             >
-              <Database className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+              <Database className="w-3.5 h-3.5 text-[#00E599] shrink-0" />
               <span className="font-medium max-w-[190px] truncate">
                 {selectedConnIds.length === connections.length
                   ? `All Databases (${connections.length})`
@@ -473,21 +473,21 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
                     : `${selectedConnIds.length} Databases Selected`}
               </span>
               <ChevronDown
-                className={`w-3.5 h-3.5 text-neutral-400 transition-transform duration-200 ${dropdownOpen ? "rotate-180" : ""
+                className={`w-3.5 h-3.5 text-[#A1A1AA] transition-transform duration-200 ${dropdownOpen ? "rotate-180" : ""
                   }`}
               />
             </button>
 
             {dropdownOpen && (
-              <div className="absolute right-0 mt-2 w-72 p-2 rounded-2xl bg-slate-950/95 border border-white/15 shadow-2xl z-50 space-y-1.5 animate-in fade-in zoom-in-95 duration-100 backdrop-blur-2xl">
-                <div className="flex items-center justify-between px-2 py-1 border-b border-white/5 pb-2">
-                  <span className="text-[11px] font-semibold text-neutral-300">
+              <div className="absolute right-0 mt-2 w-72 p-2 rounded-[10px] bg-[#18181B] border border-white/[0.08] shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)] z-50 space-y-1.5 animate-in fade-in zoom-in-95 duration-100 backdrop-blur-2xl">
+                <div className="flex items-center justify-between px-2 py-1 border-b border-white/[0.08] pb-2">
+                  <span className="text-[11px] font-semibold text-[#FAFAFA]">
                     Select Target Databases
                   </span>
                   <button
                     type="button"
                     onClick={handleSelectAll}
-                    className="text-[10px] text-indigo-400 hover:text-indigo-300 transition-colors cursor-pointer"
+                    className="text-[10px] text-[#00E599] hover:text-[#00E599]/80 font-mono transition-colors cursor-pointer"
                   >
                     {selectedConnIds.length === connections.length ? "Reset" : "Select All"}
                   </button>
@@ -501,25 +501,25 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
                         key={conn.id}
                         type="button"
                         onClick={() => handleToggleConnection(conn.id)}
-                        className={`w-full flex items-center justify-between p-2 rounded-xl text-left text-xs transition-colors cursor-pointer ${isSelected
-                          ? "bg-indigo-600/20 text-white border border-indigo-500/40 shadow-sm"
-                          : "hover:bg-white/5 text-neutral-300 border border-transparent"
+                        className={`w-full flex items-center justify-between p-2 rounded-[6px] text-left text-xs transition-colors cursor-pointer ${isSelected
+                          ? "bg-white/[0.08] text-[#FAFAFA] border border-[#00E599]/40 shadow-sm"
+                          : "hover:bg-white/[0.04] text-[#A1A1AA] border border-transparent"
                           }`}
                       >
                         <div className="flex items-center gap-2 min-w-0 pr-2">
                           {isSelected ? (
-                            <CheckSquare className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                            <CheckSquare className="w-3.5 h-3.5 text-[#00E599] shrink-0" />
                           ) : (
-                            <Square className="w-3.5 h-3.5 text-neutral-500 shrink-0" />
+                            <Square className="w-3.5 h-3.5 text-[#A1A1AA] shrink-0" />
                           )}
                           <div className="truncate">
-                            <div className="font-semibold truncate">{conn.name}</div>
-                            <div className="text-[10px] text-neutral-500 font-mono">
+                            <div className="font-semibold truncate text-[#FAFAFA]">{conn.name}</div>
+                            <div className="text-[10px] text-[#A1A1AA] font-mono">
                               {conn.dbName} ({conn.dbType.toUpperCase()})
                             </div>
                           </div>
                         </div>
-                        <span className="text-[9px] uppercase font-mono px-1.5 py-0.5 rounded bg-white/5 text-neutral-400 border border-white/5 shrink-0">
+                        <span className="text-[9px] uppercase font-mono px-1.5 py-0.5 rounded-[4px] bg-[#121215] text-[#A1A1AA] border border-white/[0.08] shrink-0">
                           {conn.dbType}
                         </span>
                       </button>
@@ -534,16 +534,16 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
           <button
             type="button"
             onClick={() => setChatMenuOpen(!chatMenuOpen)}
-            className={`px-3 py-1.5 rounded-xl border text-xs flex items-center gap-1.5 transition-all cursor-pointer shadow-md backdrop-blur-md ${chatMenuOpen
-              ? "bg-indigo-600/30 border-indigo-500/50 text-white"
-              : "bg-black/60 border-white/15 hover:border-white/25 text-neutral-300 hover:text-white"
+            className={`px-3 py-1.5 rounded-[6px] border text-xs flex items-center gap-1.5 transition-all cursor-pointer shadow-sm ${chatMenuOpen
+              ? "bg-[#18181B] border-[#00E599]/50 text-[#FAFAFA]"
+              : "bg-[#18181B] border-white/[0.08] hover:border-white/[0.15] text-[#A1A1AA] hover:text-[#FAFAFA]"
               }`}
             title="Conversation Timeline & History"
           >
-            <AlignRight className="w-3.5 h-3.5 text-indigo-400" />
+            <AlignRight className="w-3.5 h-3.5 text-[#00E599]" />
             <span className="hidden sm:inline font-medium">History</span>
             {userMessages.length > 0 && (
-              <span className="px-1.5 py-0.2 rounded-full bg-indigo-500/25 text-indigo-300 text-[10px] font-mono">
+              <span className="px-1.5 py-0.2 rounded-[4px] bg-[#00E599]/15 text-[#00E599] text-[10px] font-mono">
                 {userMessages.length}
               </span>
             )}
@@ -554,7 +554,7 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
             type="button"
             onClick={handleClearHistory}
             title="Clear active conversation"
-            className="p-1.5 rounded-xl bg-black/60 border border-white/15 hover:border-rose-500/30 text-neutral-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer backdrop-blur-md"
+            className="p-1.5 rounded-[6px] bg-[#18181B] border border-white/[0.08] hover:border-rose-500/30 text-[#A1A1AA] hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
           >
             <Trash2 className="w-3.5 h-3.5" />
           </button>
@@ -567,38 +567,38 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
           ref={chatScrollContainerRef}
           className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 space-y-6 pr-10 scroll-smooth"
         >
-          {/* Centered Ruixen Moon Hero Display when No User Messages */}
+          {/* Centered Hero Display when No User Messages */}
           {!hasUserQueries && (
             <div className="flex flex-col items-center justify-center min-h-[50vh] text-center px-4">
-              <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-purple-600 flex items-center justify-center text-white shadow-2xl shadow-indigo-500/30 mb-5 animate-in zoom-in-90 duration-300">
-                <Sparkles className="w-8 h-8 animate-pulse" />
+              <div className="w-14 h-14 rounded-[10px] bg-gradient-to-tr from-[#00E599] to-[#10B981] flex items-center justify-center text-[#09090B] shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)] mb-5 animate-in zoom-in-90 duration-300">
+                <Sparkles className="w-7 h-7 animate-pulse" />
               </div>
-              <h1 className="text-3xl sm:text-5xl font-extrabold text-white tracking-tight drop-shadow-md">
-                DataBridge <span className="text-indigo-400">AI</span>
+              <h1 className="text-3xl sm:text-5xl font-extrabold text-[#FAFAFA] tracking-tight">
+                DataBridge <span className="text-[#00E599]">AI</span>
               </h1>
-              <p className="mt-3 text-sm text-neutral-300 max-w-md mx-auto leading-relaxed">
+              <p className="mt-3 text-sm text-[#A1A1AA] max-w-md mx-auto leading-relaxed">
                 Autonomous multi-database business intelligence. Ask any operational question in natural language below.
               </p>
 
               {/* Enterprise Quick Action Chips */}
               <div className="flex items-center justify-center flex-wrap gap-2.5 max-w-2xl mt-8">
                 <QuickActionChip
-                  icon={<Users className="w-3.5 h-3.5 text-indigo-400" />}
+                  icon={<Users className="w-3.5 h-3.5 text-[#00E599]" />}
                   label="Top 10 Customers"
                   onClick={() => handleQuickPrompt("List our top 10 customers by order volume with their status.")}
                 />
                 <QuickActionChip
-                  icon={<TrendingUp className="w-3.5 h-3.5 text-emerald-400" />}
+                  icon={<TrendingUp className="w-3.5 h-3.5 text-[#10B981]" />}
                   label="Sales Breakdown"
                   onClick={() => handleQuickPrompt("Compare sales revenue breakdown across all connected businesses.")}
                 />
                 <QuickActionChip
-                  icon={<Receipt className="w-3.5 h-3.5 text-amber-400" />}
+                  icon={<Receipt className="w-3.5 h-3.5 text-[#F59E0B]" />}
                   label="Recent Invoices & Orders"
                   onClick={() => handleQuickPrompt("Show our most recent high-value orders and outstanding balances.")}
                 />
                 <QuickActionChip
-                  icon={<GitCompare className="w-3.5 h-3.5 text-blue-400" />}
+                  icon={<GitCompare className="w-3.5 h-3.5 text-[#0EA5E9]" />}
                   label="Cross-DB Reconciliation"
                   onClick={() => handleQuickPrompt("Synthesize customer overlap and transaction standing across connected databases.")}
                 />
@@ -616,11 +616,11 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
                 <div
                   id={msg.id}
                   key={msg.id}
-                  className={`flex gap-3 max-w-5xl transition-all duration-300 rounded-2xl p-1 ${isUser ? "ml-auto justify-end" : "mr-auto"
+                  className={`flex gap-3 max-w-5xl transition-all duration-300 rounded-[10px] p-1 ${isUser ? "ml-auto justify-end" : "mr-auto"
                     }`}
                 >
                   {!isUser && (
-                    <div className="w-8 h-8 rounded-xl bg-indigo-600/30 border border-indigo-500/40 flex items-center justify-center text-indigo-300 shrink-0 mt-0.5 shadow-md">
+                    <div className="w-8 h-8 rounded-[6px] bg-[#18181B] border border-white/[0.08] flex items-center justify-center text-[#00E599] shrink-0 mt-0.5 shadow-sm">
                       <Bot className="w-4 h-4" />
                     </div>
                   )}
@@ -629,16 +629,16 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
                     {/* User Card */}
                     {isUser ? (
                       <div className="space-y-1.5">
-                        <div className="p-4 rounded-2xl bg-indigo-600/90 text-white text-xs shadow-xl max-w-xl leading-relaxed backdrop-blur-md border border-indigo-400/30">
+                        <div className="p-4 rounded-[10px] bg-[#18181B] text-[#FAFAFA] text-xs shadow-sm max-w-xl leading-relaxed border border-white/[0.08]">
                           {msg.content}
                         </div>
                         {msg.targetedDatabases && msg.targetedDatabases.length > 0 && (
-                          <div className="flex flex-wrap items-center justify-end gap-1.5 text-[10px] text-neutral-400 font-mono">
-                            <span className="text-neutral-500">Queried:</span>
+                          <div className="flex flex-wrap items-center justify-end gap-1.5 text-[10px] text-[#A1A1AA] font-mono">
+                            <span className="text-[#A1A1AA]/60">Queried:</span>
                             {msg.targetedDatabases.map((db) => (
                               <span
                                 key={db.id}
-                                className="px-1.5 py-0.5 rounded bg-black/60 border border-white/10 text-indigo-300"
+                                className="px-1.5 py-0.5 rounded-[4px] bg-[#121215] border border-white/[0.08] text-[#00E599]"
                               >
                                 {db.name} [{db.dbType}]
                               </span>
@@ -713,50 +713,50 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
                             return (
                               <div className="space-y-4">
                                 {/* Executive Summary Markdown */}
-                                <div className="p-5 sm:p-6 rounded-2xl bg-black/75 border border-white/15 shadow-2xl text-neutral-200 text-xs leading-relaxed backdrop-blur-xl">
+                                <div className="p-5 sm:p-6 rounded-[10px] bg-[#121215] border border-white/[0.08] shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)] text-[#FAFAFA] text-xs leading-relaxed backdrop-blur-xl">
                                   <ReactMarkdown
                                     remarkPlugins={[remarkGfm]}
                                     components={{
                                       table: ({ ...props }) => (
-                                        <div className="my-4 overflow-x-auto rounded-xl border border-white/15 shadow-lg bg-black/50">
+                                        <div className="my-4 overflow-x-auto rounded-[6px] border border-white/[0.08] shadow-inner bg-[#09090B]">
                                           <table className="w-full text-left text-xs border-collapse font-sans" {...props} />
                                         </div>
                                       ),
                                       thead: ({ ...props }) => (
-                                        <thead className="bg-slate-900/90 text-neutral-200 border-b border-white/15 font-semibold" {...props} />
+                                        <thead className="bg-[#18181B] text-[#FAFAFA] border-b border-white/[0.08] font-semibold" {...props} />
                                       ),
                                       th: ({ ...props }) => (
-                                        <th className="px-4 py-3 text-[11px] font-bold tracking-wider text-indigo-300 uppercase whitespace-nowrap bg-white/[0.03]" {...props} />
+                                        <th className="px-4 py-2.5 text-[10px] font-bold tracking-wider text-[#00E599] uppercase whitespace-nowrap font-mono" {...props} />
                                       ),
                                       tbody: ({ ...props }) => (
-                                        <tbody className="divide-y divide-white/5 bg-black/40" {...props} />
+                                        <tbody className="divide-y divide-white/[0.04]" {...props} />
                                       ),
                                       tr: ({ ...props }) => (
-                                        <tr className="hover:bg-indigo-500/10 transition-colors even:bg-white/[0.02]" {...props} />
+                                        <tr className="hover:bg-white/[0.03] transition-colors" {...props} />
                                       ),
                                       td: ({ ...props }) => (
-                                        <td className="px-4 py-3 text-xs text-neutral-200 font-mono whitespace-nowrap" {...props} />
+                                        <td className="px-4 py-2.5 text-xs text-[#FAFAFA] font-mono whitespace-nowrap" {...props} />
                                       ),
                                       h2: ({ ...props }) => (
-                                        <h2 className="text-base font-bold text-white mt-1 mb-2 tracking-tight flex items-center gap-2" {...props} />
+                                        <h2 className="text-base font-bold text-[#FAFAFA] mt-1 mb-2 tracking-tight flex items-center gap-2" {...props} />
                                       ),
                                       h3: ({ ...props }) => (
-                                        <h3 className="text-xs font-bold text-indigo-300 mt-4 mb-1.5 uppercase tracking-wider" {...props} />
+                                        <h3 className="text-xs font-bold text-[#00E599] mt-4 mb-1.5 uppercase tracking-wider font-mono" {...props} />
                                       ),
                                       h4: ({ ...props }) => (
-                                        <h4 className="text-xs font-bold text-indigo-300 mt-3 mb-1" {...props} />
+                                        <h4 className="text-xs font-bold text-[#00E599] mt-3 mb-1" {...props} />
                                       ),
                                       p: ({ ...props }) => (
-                                        <p className="text-xs text-neutral-300 leading-relaxed my-1.5" {...props} />
+                                        <p className="text-xs text-[#FAFAFA]/90 leading-relaxed my-1.5" {...props} />
                                       ),
                                       ul: ({ ...props }) => (
-                                        <ul className="list-disc list-outside pl-4 space-y-1.5 my-2 text-xs text-neutral-300" {...props} />
+                                        <ul className="list-disc list-outside pl-4 space-y-1.5 my-2 text-xs text-[#A1A1AA]" {...props} />
                                       ),
                                       li: ({ ...props }) => (
-                                        <li className="text-xs text-neutral-300 leading-relaxed" {...props} />
+                                        <li className="text-xs text-[#FAFAFA]/90 leading-relaxed" {...props} />
                                       ),
                                       strong: ({ ...props }) => (
-                                        <strong className="font-semibold text-white" {...props} />
+                                        <strong className="font-semibold text-[#FAFAFA]" {...props} />
                                       ),
                                     }}
                                   >
@@ -789,50 +789,50 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
 
                           if (sanitizedContent) {
                             return (
-                              <div className="p-5 sm:p-6 rounded-2xl bg-black/75 border border-white/15 shadow-2xl text-neutral-200 text-xs leading-relaxed backdrop-blur-xl">
+                              <div className="p-5 sm:p-6 rounded-[10px] bg-[#121215] border border-white/[0.08] shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)] text-[#FAFAFA] text-xs leading-relaxed backdrop-blur-xl">
                                 <ReactMarkdown
                                   remarkPlugins={[remarkGfm]}
                                   components={{
                                     table: ({ ...props }) => (
-                                      <div className="my-4 overflow-x-auto rounded-xl border border-white/15 shadow-lg bg-black/50">
+                                      <div className="my-4 overflow-x-auto rounded-[6px] border border-white/[0.08] shadow-inner bg-[#09090B]">
                                         <table className="w-full text-left text-xs border-collapse font-sans" {...props} />
                                       </div>
                                     ),
                                     thead: ({ ...props }) => (
-                                      <thead className="bg-slate-900/90 text-neutral-200 border-b border-white/15 font-semibold" {...props} />
+                                      <thead className="bg-[#18181B] text-[#FAFAFA] border-b border-white/[0.08] font-semibold" {...props} />
                                     ),
                                     th: ({ ...props }) => (
-                                      <th className="px-4 py-3 text-[11px] font-bold tracking-wider text-indigo-300 uppercase whitespace-nowrap bg-white/[0.03]" {...props} />
+                                      <th className="px-4 py-2.5 text-[10px] font-bold tracking-wider text-[#00E599] uppercase whitespace-nowrap font-mono" {...props} />
                                     ),
                                     tbody: ({ ...props }) => (
-                                      <tbody className="divide-y divide-white/5 bg-black/40" {...props} />
+                                      <tbody className="divide-y divide-white/[0.04]" {...props} />
                                     ),
                                     tr: ({ ...props }) => (
-                                      <tr className="hover:bg-indigo-500/10 transition-colors even:bg-white/[0.02]" {...props} />
+                                      <tr className="hover:bg-white/[0.03] transition-colors" {...props} />
                                     ),
                                     td: ({ ...props }) => (
-                                      <td className="px-4 py-3 text-xs text-neutral-200 font-mono whitespace-nowrap" {...props} />
+                                      <td className="px-4 py-2.5 text-xs text-[#FAFAFA] font-mono whitespace-nowrap" {...props} />
                                     ),
                                     h2: ({ ...props }) => (
-                                      <h2 className="text-base font-bold text-white mt-1 mb-2 tracking-tight flex items-center gap-2" {...props} />
+                                      <h2 className="text-base font-bold text-[#FAFAFA] mt-1 mb-2 tracking-tight flex items-center gap-2" {...props} />
                                     ),
                                     h3: ({ ...props }) => (
-                                      <h3 className="text-xs font-bold text-indigo-300 mt-4 mb-1.5 uppercase tracking-wider" {...props} />
+                                      <h3 className="text-xs font-bold text-[#00E599] mt-4 mb-1.5 uppercase tracking-wider font-mono" {...props} />
                                     ),
                                     h4: ({ ...props }) => (
-                                      <h4 className="text-xs font-bold text-indigo-300 mt-3 mb-1" {...props} />
+                                      <h4 className="text-xs font-bold text-[#00E599] mt-3 mb-1" {...props} />
                                     ),
                                     p: ({ ...props }) => (
-                                      <p className="text-xs text-neutral-300 leading-relaxed my-1.5" {...props} />
+                                      <p className="text-xs text-[#FAFAFA]/90 leading-relaxed my-1.5" {...props} />
                                     ),
                                     ul: ({ ...props }) => (
-                                      <ul className="list-disc list-outside pl-4 space-y-1.5 my-2 text-xs text-neutral-300" {...props} />
+                                      <ul className="list-disc list-outside pl-4 space-y-1.5 my-2 text-xs text-[#A1A1AA]" {...props} />
                                     ),
                                     li: ({ ...props }) => (
-                                      <li className="text-xs text-neutral-300 leading-relaxed" {...props} />
+                                      <li className="text-xs text-[#FAFAFA]/90 leading-relaxed" {...props} />
                                     ),
                                     strong: ({ ...props }) => (
-                                      <strong className="font-semibold text-white" {...props} />
+                                      <strong className="font-semibold text-[#FAFAFA]" {...props} />
                                     ),
                                   }}
                                 >
@@ -845,9 +845,9 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
                           // Only render the spinner if we are actively generating for THIS message
                           if (loading && msg.id === activeAssistantId) {
                             return (
-                              <div className="p-5 rounded-2xl bg-black/75 border border-white/15 shadow-2xl backdrop-blur-xl">
-                                <div className="flex items-center gap-2.5 text-neutral-400 font-mono text-xs py-1">
-                                  <RefreshCw className="w-4 h-4 animate-spin text-indigo-400" />
+                              <div className="p-5 rounded-[10px] bg-[#121215] border border-white/[0.08] shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)]">
+                                <div className="flex items-center gap-2.5 text-[#A1A1AA] font-mono text-xs py-1">
+                                  <RefreshCw className="w-4 h-4 animate-spin text-[#00E599]" />
                                   <span>Synthesizing verified query results & auto-visualization...</span>
                                 </div>
                               </div>
@@ -856,21 +856,21 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
 
                           // If request finished/stopped and there is no content, render a graceful notice
                           return (
-                            <div className="p-5 sm:p-6 rounded-2xl bg-gradient-to-b from-amber-950/30 to-black/85 border border-amber-500/30 shadow-2xl backdrop-blur-xl text-neutral-200">
+                            <div className="p-5 sm:p-6 rounded-[10px] bg-[#121215] border border-[#F59E0B]/30 shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)] text-[#FAFAFA]">
                               <div className="flex items-start gap-3.5">
-                                <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0 mt-0.5 shadow-lg shadow-amber-950/50">
+                                <div className="w-8 h-8 rounded-[6px] bg-[#F59E0B]/20 border border-[#F59E0B]/40 flex items-center justify-center text-[#F59E0B] shrink-0 mt-0.5">
                                   <AlertCircle className="w-4 h-4" />
                                 </div>
                                 <div className="space-y-2.5 flex-1 min-w-0">
                                   <div className="flex items-center justify-between gap-2">
-                                    <h4 className="text-xs font-bold text-amber-300 uppercase tracking-wider font-mono">
+                                    <h4 className="text-xs font-bold text-[#F59E0B] uppercase tracking-wider font-mono">
                                       Query Synthesis Interrupted
                                     </h4>
-                                    <span className="text-[9px] font-mono text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                                    <span className="text-[9px] font-mono text-[#F59E0B] bg-[#F59E0B]/10 px-2 py-0.5 rounded-[4px] border border-[#F59E0B]/20">
                                       No Response
                                     </span>
                                   </div>
-                                  <p className="text-xs text-neutral-300 leading-relaxed">
+                                  <p className="text-xs text-[#A1A1AA] leading-relaxed">
                                     No response was returned for this query. The upstream AI provider may be temporarily rate-limited or the network stream ended prematurely.
                                   </p>
                                   <div className="pt-2 flex flex-wrap items-center gap-2">
@@ -885,7 +885,7 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
                                           handleQuickPrompt(prevUserMsg.content);
                                         }
                                       }}
-                                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-200 hover:text-white text-xs font-medium transition-all shadow-sm cursor-pointer"
+                                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-[6px] bg-[#F59E0B]/15 hover:bg-[#F59E0B]/25 border border-[#F59E0B]/30 text-[#F59E0B] hover:text-white text-xs font-medium transition-all shadow-sm cursor-pointer"
                                     >
                                       <RefreshCw className="w-3.5 h-3.5" />
                                       <span>Retry Query</span>
@@ -898,18 +898,18 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
                         })()}
 
                         {/* Assistant Actions */}
-                        <div className="flex items-center justify-between px-1 text-[10px] text-neutral-500 font-mono">
+                        <div className="flex items-center justify-between px-1 text-[10px] text-[#A1A1AA] font-mono">
                           <span suppressHydrationWarning>{msg.timestamp}</span>
                           {sanitizedContent && (
                             <button
                               type="button"
                               onClick={() => handleCopyMessage(msg.id, sanitizedContent)}
-                              className="flex items-center gap-1 hover:text-neutral-300 transition-colors cursor-pointer"
+                              className="flex items-center gap-1 hover:text-[#FAFAFA] transition-colors cursor-pointer"
                             >
                               {copiedId === msg.id ? (
                                 <>
-                                  <Check className="w-3 h-3 text-emerald-400" />
-                                  <span className="text-emerald-400">Copied</span>
+                                  <Check className="w-3 h-3 text-[#00E599]" />
+                                  <span className="text-[#00E599]">Copied</span>
                                 </>
                               ) : (
                                 <>
@@ -925,7 +925,7 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
                   </div>
 
                   {isUser && (
-                    <div className="w-8 h-8 rounded-xl bg-indigo-600/40 border border-indigo-500/50 flex items-center justify-center text-indigo-200 shrink-0 mt-0.5 shadow-md">
+                    <div className="w-8 h-8 rounded-[6px] bg-[#18181B] border border-white/[0.08] flex items-center justify-center text-[#00E599] shrink-0 mt-0.5 shadow-sm">
                       <User className="w-4 h-4" />
                     </div>
                   )}
@@ -935,13 +935,13 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
 
           {/* Loading Indicator */}
           {loading && (
-            <div className="flex items-center gap-2 text-neutral-400 text-xs px-2 py-1">
+            <div className="flex items-center gap-2 text-[#A1A1AA] text-xs px-2 py-1">
               <div className="flex gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
-                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse delay-150" />
-                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse delay-300" />
+                <span className="w-1.5 h-1.5 rounded-full bg-[#00E599] animate-pulse" />
+                <span className="w-1.5 h-1.5 rounded-full bg-[#00E599] animate-pulse delay-150" />
+                <span className="w-1.5 h-1.5 rounded-full bg-[#00E599] animate-pulse delay-300" />
               </div>
-              <span className="text-xs font-mono text-neutral-400">
+              <span className="text-xs font-mono text-[#A1A1AA]">
                 Querying {selectedConnIds.length} database{selectedConnIds.length > 1 ? "s" : ""}...
               </span>
             </div>
@@ -971,16 +971,16 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
                       onMouseEnter={() => setHoveredMsgId(msg.id)}
                       onMouseLeave={() => setHoveredMsgId(null)}
                       className={`block rounded-full transition-all duration-200 cursor-pointer ${isUser
-                        ? "w-3 h-1 bg-indigo-400/80 hover:w-5 hover:bg-indigo-300"
-                        : "w-2 h-0.5 bg-neutral-600 hover:w-4 hover:bg-emerald-400"
-                        } ${isHovered ? "ring-2 ring-indigo-400/50" : ""}`}
+                        ? "w-3 h-1 bg-[#0EA5E9] hover:w-5 hover:bg-[#0EA5E9]/80"
+                        : "w-2 h-0.5 bg-neutral-600 hover:w-4 hover:bg-[#00E599]"
+                        } ${isHovered ? "ring-2 ring-[#00E599]/50" : ""}`}
                       title={`${isUser ? "User Query" : "AI Briefing"}: ${snippet}`}
                     />
 
                     {/* Tooltip Preview */}
-                    <div className="absolute right-7 px-3 py-1.5 rounded-xl bg-black/95 border border-white/20 text-neutral-200 shadow-2xl pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-30 whitespace-nowrap min-w-[150px] max-w-xs backdrop-blur-xl">
-                      <div className="flex items-center justify-between gap-2 pb-1 border-b border-white/10 text-[9px] font-mono text-neutral-400">
-                        <span className={isUser ? "text-indigo-400 font-bold" : "text-emerald-400 font-bold"}>
+                    <div className="absolute right-7 px-3 py-1.5 rounded-[6px] bg-[#121215] border border-[rgba(255,255,255,0.08)] text-[#FAFAFA] shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)] pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-30 whitespace-nowrap min-w-[150px] max-w-xs backdrop-blur-xl">
+                      <div className="flex items-center justify-between gap-2 pb-1 border-b border-[rgba(255,255,255,0.08)] text-[9px] font-mono text-[#A1A1AA]">
+                        <span className={isUser ? "text-[#0EA5E9] font-bold" : "text-[#00E599] font-bold"}>
                           {isUser ? `Query #${index + 1}` : "Executive Brief"}
                         </span>
                         <span>{msg.timestamp}</span>
@@ -1039,13 +1039,13 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
                       scrollToMessage(m.id);
                       setChatMenuOpen(false);
                     }}
-                    className={`w-full p-2.5 rounded-xl text-left text-xs transition-all border cursor-pointer ${isUser
-                      ? "bg-indigo-600/15 hover:bg-indigo-600/25 border-indigo-500/30 text-neutral-200"
-                      : "bg-neutral-900/40 hover:bg-neutral-900/70 border-white/5 text-neutral-400 hover:text-neutral-200"
+                    className={`w-full p-2.5 rounded-[6px] text-left text-xs transition-all border cursor-pointer ${isUser
+                      ? "bg-[#00E599]/10 hover:bg-[#00E599]/20 border-[#00E599]/30 text-[#FAFAFA]"
+                      : "bg-[#18181B] hover:bg-[#27272A] border-[rgba(255,255,255,0.08)] text-[#A1A1AA] hover:text-[#FAFAFA]"
                       }`}
                   >
-                    <div className="flex items-center justify-between text-[10px] font-mono text-neutral-500 mb-1">
-                      <span className={`font-semibold ${isUser ? "text-indigo-400" : "text-emerald-400"}`}>
+                    <div className="flex items-center justify-between text-[10px] font-mono text-[#71717A] mb-1">
+                      <span className={`font-semibold ${isUser ? "text-[#00E599]" : "text-[#10B981]"}`}>
                         {isUser ? `Query #${idx + 1}` : "Analysis"}
                       </span>
                       <span>{m.timestamp}</span>
@@ -1058,8 +1058,8 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
               })}
             </div>
 
-            <div className="p-3 border-t border-white/10 bg-black flex items-center justify-between">
-              <span className="text-[10px] text-neutral-500 font-mono">
+            <div className="p-3 border-t border-white/[0.08] bg-[#121215] flex items-center justify-between">
+              <span className="text-[10px] text-[#A1A1AA] font-mono">
                 Click any query to jump
               </span>
               <button
@@ -1068,7 +1068,7 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
                   chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
                   setChatMenuOpen(false);
                 }}
-                className="text-xs text-indigo-400 hover:text-indigo-300 font-medium cursor-pointer"
+                className="text-xs text-[#00E599] hover:text-[#00E599]/80 font-mono font-medium cursor-pointer"
               >
                 Jump to bottom
               </button>
@@ -1085,9 +1085,9 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
         </div>
       )}
 
-      {/* Floating Ruixen-Style Moon Input Box Section */}
+      {/* Floating Modern Fintech Input Box Section */}
       <div className="relative z-20 w-full max-w-4xl mx-auto px-4 pb-4 sm:pb-6">
-        <div className="relative bg-black/75 backdrop-blur-2xl rounded-2xl border border-neutral-700/80 shadow-2xl transition-all focus-within:border-indigo-500/60 focus-within:ring-1 focus-within:ring-indigo-500/40">
+        <div className="relative bg-[#121215] rounded-[10px] border border-white/[0.08] shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)] transition-all focus-within:border-[#00E599]/50 focus-within:ring-1 focus-within:ring-[#00E599]/30">
           <Textarea
             ref={textareaRef}
             value={prompt}
@@ -1101,9 +1101,9 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
               }... (e.g. "Who are our top customers?" or "Compare sales by region")`}
             className={cn(
               "w-full px-4 py-3 resize-none border-none",
-              "bg-transparent text-white text-xs sm:text-sm",
+              "bg-transparent text-[#FAFAFA] text-xs sm:text-sm",
               "focus-visible:ring-0 focus-visible:ring-offset-0",
-              "placeholder:text-neutral-400 min-h-[50px]"
+              "placeholder:text-[#A1A1AA] min-h-[50px]"
             )}
             style={{ overflow: "hidden" }}
             onKeyDown={(e) => {
@@ -1115,23 +1115,23 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
           />
 
           {/* Footer Buttons Bar */}
-          <div className="flex items-center justify-between p-3 border-t border-white/5">
+          <div className="flex items-center justify-between p-3 border-t border-white/[0.08]">
             <div className="flex items-center gap-2">
               <Button
                 variant="ghost"
                 size="icon"
                 type="button"
                 onClick={() => setDropdownOpen(true)}
-                className="text-neutral-400 hover:text-white hover:bg-neutral-800 rounded-xl h-8 w-8"
+                className="text-[#A1A1AA] hover:text-[#FAFAFA] hover:bg-[#18181B] rounded-[6px] h-8 w-8"
                 title="Target Databases"
               >
                 <Paperclip className="w-4 h-4" />
               </Button>
 
-              <span className="text-[11px] font-mono text-neutral-400 flex items-center gap-1.5">
-                <Layers className="w-3 h-3 text-indigo-400" />
+              <span className="text-[11px] font-mono text-[#A1A1AA] flex items-center gap-1.5">
+                <Layers className="w-3 h-3 text-[#00E599]" />
                 <span className="hidden sm:inline">Targeting:</span>{" "}
-                <span className="text-neutral-200 font-semibold truncate max-w-[180px]">
+                <span className="text-[#FAFAFA] font-medium truncate max-w-[180px]">
                   {selectedConnIds.length === connections.length
                     ? `All (${connections.length})`
                     : selectedConnIds.length === 1
@@ -1142,7 +1142,7 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
             </div>
 
             <div className="flex items-center gap-2">
-              <span className="hidden md:inline text-[10px] text-neutral-500 font-mono">
+              <span className="hidden md:inline text-[10px] text-[#A1A1AA] font-mono">
                 Press Enter to send
               </span>
 
@@ -1151,10 +1151,10 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
                 onClick={() => handleSubmit()}
                 disabled={loading || !prompt.trim() || selectedConnIds.length === 0}
                 className={cn(
-                  "flex items-center gap-1 px-3 py-2 rounded-xl transition-all h-8",
+                  "flex items-center gap-1 px-3 py-2 rounded-[6px] transition-all h-8",
                   loading || !prompt.trim() || selectedConnIds.length === 0
-                    ? "bg-neutral-800 text-neutral-500 cursor-not-allowed border border-white/5"
-                    : "bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/30 cursor-pointer"
+                    ? "bg-[#18181B] text-[#A1A1AA]/40 cursor-not-allowed border border-white/[0.08]"
+                    : "bg-[#00E599] hover:bg-[#00E599]/90 text-[#09090B] font-semibold shadow-sm cursor-pointer"
                 )}
               >
                 {loading ? (
@@ -1190,7 +1190,7 @@ function QuickActionChip({ icon, label, onClick }: QuickActionChipProps) {
     <button
       type="button"
       onClick={onClick}
-      className="flex items-center gap-2 px-3.5 py-2 rounded-full border border-neutral-700/80 bg-black/60 backdrop-blur-md text-neutral-300 hover:text-white hover:bg-neutral-800 hover:border-indigo-500/40 transition-all text-xs cursor-pointer shadow-lg group"
+      className="flex items-center gap-2 px-3.5 py-2 rounded-[6px] border border-white/[0.08] bg-[#18181B] text-[#FAFAFA] hover:text-white hover:bg-[#27272A] hover:border-[#00E599]/40 transition-all text-xs cursor-pointer shadow-sm group"
     >
       <span className="group-hover:scale-110 transition-transform">{icon}</span>
       <span>{label}</span>

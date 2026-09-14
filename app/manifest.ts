@@ -7,8 +7,8 @@ export default function manifest(): MetadataRoute.Manifest {
     description: "Enterprise AI analytics dashboard with real-time telemetry, model metrics, and chat intelligence.",
     start_url: "/",
     display: "standalone",
-    background_color: "#0b0f19",
-    theme_color: "#6366f1",
+    background_color: "#09090B",
+    theme_color: "#00E599",
     orientation: "portrait-primary",
     scope: "/",
     icons: [

@@ -69,15 +69,15 @@ export default async function DashboardPage() {
       <div className="flex-1 flex flex-col h-full w-full relative">
         {connections.length === 0 ? (
           <div className="flex-1 flex items-center justify-center p-6">
-            <div className="p-10 rounded-3xl bg-slate-900/60 border border-white/10 backdrop-blur-xl text-center space-y-5 max-w-lg shadow-2xl">
-              <div className="w-14 h-14 rounded-2xl bg-indigo-600/15 border border-indigo-500/30 flex items-center justify-center mx-auto text-indigo-400 shadow-inner">
-                <Database className="w-7 h-7" />
+            <div className="p-8 sm:p-10 rounded-[10px] bg-[#121215] border border-white/[0.08] text-center space-y-5 max-w-lg shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)]">
+              <div className="w-12 h-12 rounded-[6px] bg-[#00E599]/15 border border-[#00E599]/30 flex items-center justify-center mx-auto text-[#00E599]">
+                <Database className="w-6 h-6" />
               </div>
               <div className="space-y-2">
-                <h3 className="text-lg font-bold text-white tracking-tight">
+                <h3 className="text-lg font-bold text-[#FAFAFA] tracking-tight">
                   No Database Connections Configured
                 </h3>
-                <p className="text-xs text-slate-400 max-w-sm mx-auto leading-relaxed">
+                <p className="text-xs text-[#A1A1AA] max-w-sm mx-auto leading-relaxed">
                   Connect your SQL Server, MySQL, Postgres, or other databases to enable natural language business querying.
                 </p>
               </div>
@@ -85,13 +85,13 @@ export default async function DashboardPage() {
               {isOwner ? (
                 <Link
                   href="/settings/connections"
-                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-all shadow-lg shadow-indigo-600/20"
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-[6px] bg-[#00E599] hover:bg-[#00E599]/90 text-[#09090B] text-xs font-semibold transition-all shadow-sm"
                 >
                   <Plus className="w-4 h-4" />
                   <span>Configure Databases</span>
                 </Link>
               ) : (
-                <p className="text-xs text-amber-400/90 font-mono bg-amber-400/10 py-2 px-4 rounded-xl inline-block border border-amber-400/20">
+                <p className="text-xs text-[#F59E0B] font-mono bg-[#F59E0B]/10 py-2 px-4 rounded-[6px] inline-block border border-[#F59E0B]/20">
                   Notice: Only Organization Owners have permission to add database credentials.
                 </p>
               )}

@@ -74,28 +74,28 @@ export default async function ManagementPage() {
 
   return (
     <DashboardShell>
-      <div className="w-full max-w-7xl mx-auto p-4 sm:p-6 lg:p-8 space-y-8 pb-12">
+      <div className="w-full max-w-7xl mx-auto p-4 sm:p-6 lg:p-8 space-y-8 pb-12 font-sans">
         {/* Header */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-white/10">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-[rgba(255,255,255,0.08)]">
           <div>
             <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-2xl bg-gradient-to-tr from-indigo-600 to-indigo-400 flex items-center justify-center shadow-lg shadow-indigo-600/30">
-                <Activity className="w-5 h-5 text-white" />
+              <div className="w-9 h-9 rounded-[6px] bg-[#18181B] border border-[rgba(255,255,255,0.08)] flex items-center justify-center text-[#00E599] shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)]">
+                <Activity className="w-4 h-4 text-[#00E599]" />
               </div>
               <div>
-                <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight flex items-center gap-2.5">
+                <h1 className="text-xl sm:text-2xl font-semibold text-[#FAFAFA] tracking-tight flex items-center gap-2.5">
                   <span>{organization.name}</span>
                   <span
-                    className={`text-xs font-mono font-medium px-2.5 py-0.5 rounded-lg border ${
+                    className={`text-xs font-mono font-medium px-2.5 py-0.5 rounded-[6px] border ${
                       isOwner
-                        ? "bg-amber-500/15 text-amber-300 border-amber-500/30"
-                        : "bg-indigo-500/15 text-indigo-300 border-indigo-500/30"
+                        ? "bg-[#F59E0B]/15 text-[#F59E0B] border-[#F59E0B]/30"
+                        : "bg-[#00E599]/15 text-[#00E599] border-[#00E599]/30"
                     }`}
                   >
                     {role}
                   </span>
                 </h1>
-                <p className="text-xs text-slate-400 mt-0.5">
+                <p className="text-xs text-[#A1A1AA] mt-0.5">
                   Database infrastructure telemetry, schema indexing, and connection health
                 </p>
               </div>
@@ -105,59 +105,59 @@ export default async function ManagementPage() {
           <div className="flex items-center gap-3">
             <Link
               href="/"
-              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-white/10 text-white text-xs font-semibold flex items-center gap-2 transition-all shadow-md"
+              className="px-3.5 py-2 rounded-[6px] bg-[#18181B] hover:bg-[#27272A] border border-[rgba(255,255,255,0.08)] text-[#FAFAFA] text-xs font-medium flex items-center gap-2 transition-all shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)]"
             >
-              <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+              <Sparkles className="w-3.5 h-3.5 text-[#00E599]" />
               <span>Open AI Chat Space</span>
             </Link>
 
             {isOwner && (
               <Link
                 href="/settings/connections"
-                className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-2 transition-all shadow-lg shadow-indigo-600/20"
+                className="px-3.5 py-2 rounded-[6px] bg-[#00E599] hover:bg-[#00E599]/90 text-[#09090B] text-xs font-semibold flex items-center gap-2 transition-all shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)] cursor-pointer"
               >
-                <Plus className="w-3.5 h-3.5" />
+                <Plus className="w-3.5 h-3.5 text-[#09090B]" />
                 <span>Add Data Source</span>
               </Link>
             )}
           </div>
         </div>
 
-        {/* Real Metrics Overview Cards */}
+        {/* Real Metrics Overview Cards (L1) */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          <div className="p-5 rounded-2xl bg-slate-900/70 border border-white/10 backdrop-blur-xl space-y-2 shadow-xl hover:border-indigo-500/30 transition-all">
-            <div className="flex items-center justify-between text-slate-400">
+          <div className="p-5 rounded-[10px] bg-[#121215] border border-[rgba(255,255,255,0.08)] space-y-2 shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)] hover:border-[rgba(255,255,255,0.15)] transition-all">
+            <div className="flex items-center justify-between text-[#A1A1AA]">
               <span className="text-xs font-medium">Connected Databases</span>
-              <Database className="w-4 h-4 text-indigo-400" />
+              <Database className="w-4 h-4 text-[#0EA5E9]" />
             </div>
             <div className="flex items-baseline gap-2">
-              <span className="text-2xl font-bold text-white font-mono">
+              <span className="text-2xl font-bold text-[#FAFAFA] font-mono">
                 {connections.length}
               </span>
-              <span className="text-[11px] text-slate-500">active sources</span>
+              <span className="text-[11px] text-[#71717A]">active sources</span>
             </div>
           </div>
 
-          <div className="p-5 rounded-2xl bg-slate-900/70 border border-white/10 backdrop-blur-xl space-y-2 shadow-xl hover:border-emerald-500/30 transition-all">
-            <div className="flex items-center justify-between text-slate-400">
+          <div className="p-5 rounded-[10px] bg-[#121215] border border-[rgba(255,255,255,0.08)] space-y-2 shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)] hover:border-[#10B981]/30 transition-all">
+            <div className="flex items-center justify-between text-[#A1A1AA]">
               <span className="text-xs font-medium">Schemas Synced (RAG)</span>
-              <FileCode2 className="w-4 h-4 text-emerald-400" />
+              <FileCode2 className="w-4 h-4 text-[#10B981]" />
             </div>
             <div className="flex items-baseline gap-2">
-              <span className="text-2xl font-bold text-emerald-400 font-mono">
+              <span className="text-2xl font-bold text-[#10B981] font-mono">
                 {schemaReadyCount} / {connections.length}
               </span>
-              <span className="text-[11px] text-slate-500">ready for AI prompts</span>
+              <span className="text-[11px] text-[#71717A]">ready for AI prompts</span>
             </div>
           </div>
 
-          <div className="p-5 rounded-2xl bg-slate-900/70 border border-white/10 backdrop-blur-xl space-y-2 shadow-xl hover:border-blue-500/30 transition-all">
-            <div className="flex items-center justify-between text-slate-400">
+          <div className="p-5 rounded-[10px] bg-[#121215] border border-[rgba(255,255,255,0.08)] space-y-2 shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)] hover:border-[rgba(255,255,255,0.15)] transition-all">
+            <div className="flex items-center justify-between text-[#A1A1AA]">
               <span className="text-xs font-medium">Access Authorization</span>
-              <ShieldCheck className="w-4 h-4 text-blue-400" />
+              <ShieldCheck className="w-4 h-4 text-[#8B5CF6]" />
             </div>
             <div className="flex items-baseline gap-2">
-              <span className="text-sm font-bold text-slate-200 font-mono">
+              <span className="text-sm font-semibold text-[#FAFAFA] font-mono">
                 {isOwner ? "Owner (Full Admin)" : "Member (Query Only)"}
               </span>
             </div>
@@ -165,19 +165,19 @@ export default async function ManagementPage() {
         </div>
 
         {/* Configured Data Sources List */}
-        <div className="rounded-2xl bg-slate-900/70 border border-white/10 backdrop-blur-xl p-6 shadow-2xl space-y-5">
-          <div className="flex items-center justify-between pb-3 border-b border-white/10">
+        <div className="rounded-[10px] bg-[#121215] border border-[rgba(255,255,255,0.08)] p-6 shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)] space-y-5">
+          <div className="flex items-center justify-between pb-3 border-b border-[rgba(255,255,255,0.08)]">
             <div className="flex items-center gap-2">
-              <HardDrive className="w-4 h-4 text-indigo-400" />
-              <h3 className="text-sm font-bold text-white">Active Data Sources</h3>
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-slate-400">
+              <HardDrive className="w-4 h-4 text-[#00E599]" />
+              <h3 className="text-sm font-semibold text-[#FAFAFA]">Active Data Sources</h3>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-[6px] bg-[#18181B] border border-[rgba(255,255,255,0.08)] text-[#A1A1AA]">
                 {connections.length} configured
               </span>
             </div>
             {isOwner && (
               <Link
                 href="/settings/connections"
-                className="text-xs text-indigo-400 hover:text-indigo-300 font-medium flex items-center gap-1 transition-colors"
+                className="text-xs text-[#00E599] hover:text-[#00E599]/80 font-medium flex items-center gap-1 transition-colors"
               >
                 <span>Manage Connections</span>
                 <ArrowUpRight className="w-3.5 h-3.5" />
@@ -187,12 +187,12 @@ export default async function ManagementPage() {
 
           {connections.length === 0 ? (
             <div className="py-12 text-center space-y-3">
-              <Database className="w-8 h-8 mx-auto text-slate-600" />
-              <p className="text-xs text-slate-400">No database connections configured yet.</p>
+              <Database className="w-8 h-8 mx-auto text-[#71717A]" />
+              <p className="text-xs text-[#A1A1AA]">No database connections configured yet.</p>
               {isOwner && (
                 <Link
                   href="/settings/connections"
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 text-white text-xs font-medium"
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-[6px] bg-[#00E599] text-[#09090B] text-xs font-semibold"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   <span>Connect Database</span>
@@ -204,38 +204,38 @@ export default async function ManagementPage() {
               {connections.map((conn) => (
                 <div
                   key={conn.id}
-                  className="p-5 rounded-xl bg-slate-950/70 border border-white/5 hover:border-white/15 transition-all space-y-3 shadow-lg"
+                  className="p-5 rounded-[6px] bg-[#18181B] border border-[rgba(255,255,255,0.08)] hover:border-[rgba(255,255,255,0.15)] transition-all space-y-3 shadow-sm"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <h4 className="text-sm font-bold text-white flex items-center gap-2">
-                        <Server className="w-4 h-4 text-indigo-400" />
+                      <h4 className="text-sm font-semibold text-[#FAFAFA] flex items-center gap-2">
+                        <Server className="w-4 h-4 text-[#00E599]" />
                         <span>{conn.name}</span>
                       </h4>
-                      <p className="text-xs text-slate-400 font-mono mt-0.5">
+                      <p className="text-xs text-[#A1A1AA] font-mono mt-0.5">
                         {conn.host}:{conn.port}
                       </p>
                     </div>
-                    <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded-md bg-indigo-500/10 text-indigo-300 border border-indigo-500/20">
+                    <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded-[6px] bg-[#00E599]/10 text-[#00E599] border border-[#00E599]/20">
                       {conn.dbType}
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2 text-xs font-mono text-slate-400 bg-black/40 p-3 rounded-lg border border-white/5">
+                  <div className="grid grid-cols-2 gap-2 text-xs font-mono text-[#A1A1AA] bg-[#121215] p-3 rounded-[6px] border border-[rgba(255,255,255,0.08)]">
                     <div>
-                      <span className="text-slate-500">Database:</span> {conn.dbName}
+                      <span className="text-[#71717A]">Database:</span> {conn.dbName}
                     </div>
                     <div>
-                      <span className="text-slate-500">User:</span> {conn.username}
+                      <span className="text-[#71717A]">User:</span> {conn.username}
                     </div>
-                    <div className="col-span-2 flex items-center gap-1.5 mt-1.5 pt-1.5 border-t border-white/5">
+                    <div className="col-span-2 flex items-center gap-1.5 mt-1.5 pt-1.5 border-t border-[rgba(255,255,255,0.08)]">
                       {conn.schemaContext ? (
-                        <span className="text-emerald-400 flex items-center gap-1 text-[11px]">
+                        <span className="text-[#10B981] flex items-center gap-1 text-[11px]">
                           <CheckCircle2 className="w-3.5 h-3.5" />
                           RAG Schema Injected &amp; Synced
                         </span>
                       ) : (
-                        <span className="text-amber-400 flex items-center gap-1 text-[11px]">
+                        <span className="text-[#F59E0B] flex items-center gap-1 text-[11px]">
                           <AlertCircle className="w-3.5 h-3.5" />
                           Schema not synced
                         </span>
