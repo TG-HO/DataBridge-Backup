@@ -24,9 +24,12 @@ export function middleware(req: NextRequest) {
     req.cookies.get("next-auth.session-token")?.value ||
     req.cookies.get("__Secure-next-auth.session-token")?.value;
 
-  const isAuthPage = pathname === "/login" || pathname === "/register";
+  const isAuthPage =
+    pathname === "/login" ||
+    pathname === "/register" ||
+    pathname === "/forgot-password";
 
-  // 3. If already authenticated and visiting /login or /register, redirect to dashboard
+  // 3. If already authenticated and visiting auth pages, redirect to dashboard
   if (isAuthPage) {
     if (sessionToken) {
       return NextResponse.redirect(new URL("/", req.url));
