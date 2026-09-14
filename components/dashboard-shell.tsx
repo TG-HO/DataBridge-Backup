@@ -22,6 +22,7 @@ export default async function DashboardShell({ children }: DashboardShellProps) 
     role?: string;
     orgId?: string;
     orgName?: string;
+    orgCode?: string;
   };
 
   return (

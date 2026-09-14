@@ -25,6 +25,7 @@ model User {
   accounts          Account[]
   sessions          Session[]
   organizationUsers OrganizationUser[]
+  querySessions     QuerySession[]
 }
 
 model Account {
@@ -68,14 +69,16 @@ model VerificationToken {
 // --------------------------------------
 
 model Organization {
-  id        String   @id @default(cuid())
-  name      String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id         String   @id @default(cuid())
+  name       String
+  inviteCode String?  @unique
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   members       OrganizationUser[]
   dbConnections DbConnection[]
   dashboards    Dashboard[]
+  querySessions QuerySession[]
 }
 
 model OrganizationUser {
@@ -133,5 +136,43 @@ model DashboardWidget {
   updatedAt    DateTime @updatedAt
 
   dashboard Dashboard @relation(fields: [dashboardId], references: [id], onDelete: Cascade)
+}
+
+// --------------------------------------
+// AI Query & Chat Persistence Models
+// --------------------------------------
+
+model QuerySession {
+  id              String         @id @default(cuid())
+  userId          String
+  orgId           String
+  title           String         @default("New Business Inquiry")
+  selectedConnIds String?        @db.NVarChar(Max) // JSON array of selected connection IDs
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization    Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  messages        ChatMessage[]
+
+  @@index([userId, orgId])
+}
+
+model ChatMessage {
+  id                String       @id @default(cuid())
+  sessionId         String
+  role              String       // "user" | "assistant"
+  content           String       @db.NVarChar(Max)
+  timestamp         String
+  connectionId      String?
+  rawQuery          String?      @db.NVarChar(Max)
+  isError           Boolean      @default(false)
+  errorMessage      String?      @db.NVarChar(Max)
+  targetedDatabases String?      @db.NVarChar(Max) // JSON array string of DB targets
+  createdAt         DateTime     @default(now())
+
+  session           QuerySession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
 }
 

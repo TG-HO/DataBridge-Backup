@@ -19,6 +19,8 @@ import {
   ChevronDown,
   ChevronUp,
   Trash2,
+  Copy,
+  Check,
 } from "lucide-react";
 import {
   createDbConnection,
@@ -62,6 +64,8 @@ export default function DatabaseConnectionsPage() {
   // Active tenant organization state
   const [orgId, setOrgId] = useState("");
   const [orgName, setOrgName] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
+  const [copiedInvite, setCopiedInvite] = useState(false);
   const [userRole, setUserRole] = useState("MEMBER");
   const [loadingInitial, setLoadingInitial] = useState(true);
 
@@ -98,6 +102,7 @@ export default function DatabaseConnectionsPage() {
       if (res.success) {
         setOrgId(res.orgId);
         setOrgName(res.orgName);
+        if (res.inviteCode) setInviteCode(res.inviteCode);
         setUserRole(res.role);
         setConnections(res.connections as DbConnectionItem[]);
       }
@@ -302,10 +307,35 @@ export default function DatabaseConnectionsPage() {
           </div>
         </div>
 
-        {/* Tenant Organization Indicator */}
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-[6px] bg-[#18181B] border border-[rgba(255,255,255,0.08)] text-xs text-[#A1A1AA]">
-          <Building2 className="w-3.5 h-3.5 text-[#00E599]" />
-          <span className="font-medium text-[#FAFAFA]">{orgName}</span>
+        {/* Tenant Organization Indicator & Invite Code */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-[6px] bg-[#18181B] border border-[rgba(255,255,255,0.08)] text-xs text-[#A1A1AA]">
+            <Building2 className="w-3.5 h-3.5 text-[#00E599]" />
+            <span className="font-medium text-[#FAFAFA]">{orgName}</span>
+          </div>
+
+          {inviteCode && (
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-[6px] bg-[#18181B] border border-[#00E599]/30 text-xs">
+              <span className="text-[10px] uppercase tracking-wider text-[#A1A1AA]">Invite Code:</span>
+              <span className="font-mono font-bold text-[#00E599]">{inviteCode}</span>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(inviteCode);
+                  setCopiedInvite(true);
+                  setTimeout(() => setCopiedInvite(false), 2000);
+                }}
+                className="p-0.5 hover:text-[#00E599] text-[#A1A1AA] transition-colors"
+                title="Copy Organization Invite Code"
+              >
+                {copiedInvite ? (
+                  <Check className="w-3.5 h-3.5 text-[#00E599]" />
+                ) : (
+                  <Copy className="w-3.5 h-3.5" />
+                )}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

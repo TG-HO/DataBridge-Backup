@@ -73,6 +73,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           if (membership) {
             token.orgId = membership.orgId;
             token.orgName = membership.organization.name;
+            token.orgCode = membership.organization.inviteCode;
             token.role = membership.role;
           }
         } catch (e) {
@@ -87,6 +88,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const userObj = session.user as unknown as Record<string, unknown>;
         userObj.orgId = token.orgId;
         userObj.orgName = token.orgName;
+        userObj.orgCode = token.orgCode;
         userObj.role = token.role;
       }
       return session;

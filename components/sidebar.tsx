@@ -15,6 +15,8 @@ import {
   Plus,
   Trash2,
   LayoutDashboard,
+  Copy,
+  Check,
 } from "lucide-react";
 import { useQuerySessions } from "@/lib/query-session-context";
 
@@ -25,11 +27,13 @@ interface SidebarProps {
     role?: string;
     orgId?: string;
     orgName?: string;
+    orgCode?: string;
   };
 }
 
 export default function Sidebar({ user }: SidebarProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [copiedCode, setCopiedCode] = useState(false);
   const {
     sessions,
     activeSessionId,
@@ -279,6 +283,43 @@ export default function Sidebar({ user }: SidebarProps) {
             </Link>
           )}
         </div>
+
+        {!isCollapsed && user?.orgCode && (
+          <div className="flex items-center justify-between px-2 py-1.5 bg-[#18181B] border border-white/[0.06] rounded-[6px]">
+            <div className="flex flex-col min-w-0">
+              <span className="text-[9px] uppercase tracking-wider text-[#71717A] font-semibold">
+                Org Invite Code
+              </span>
+              <span className="text-[11px] font-mono font-semibold text-[#FAFAFA] tracking-wide truncate">
+                {user.orgCode}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                if (user?.orgCode) {
+                  navigator.clipboard.writeText(user.orgCode);
+                  setCopiedCode(true);
+                  setTimeout(() => setCopiedCode(false), 2000);
+                }
+              }}
+              title="Copy Organization Invite Code"
+              className="p-1.5 text-[#A1A1AA] hover:text-[#00E599] hover:bg-white/[0.06] rounded transition-colors flex items-center gap-1 text-[10px]"
+            >
+              {copiedCode ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-[#00E599]" />
+                  <span className="text-[#00E599] font-medium">Copied</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>Copy</span>
+                </>
+              )}
+            </button>
+          </div>
+        )}
       </div>
     </aside>
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -14,16 +14,8 @@ import {
   AlertCircle,
   CheckCircle2,
   PlusCircle,
+  KeyRound,
 } from "lucide-react";
-
-interface OrganizationOption {
-  id: string;
-  name: string;
-  _count?: {
-    members: number;
-    dbConnections: number;
-  };
-}
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -32,25 +24,10 @@ export default function RegisterPage() {
   const [password, setPassword] = useState("");
   const [orgMode, setOrgMode] = useState<"create" | "join">("create");
   const [orgName, setOrgName] = useState("");
-  const [selectedOrgId, setSelectedOrgId] = useState("");
-  const [availableOrgs, setAvailableOrgs] = useState<OrganizationOption[]>([]);
+  const [orgCode, setOrgCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-
-  useEffect(() => {
-    fetch("/api/organizations")
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.organizations && data.organizations.length > 0) {
-          setAvailableOrgs(data.organizations);
-          setSelectedOrgId(data.organizations[0].id);
-        }
-      })
-      .catch(() => {
-        // Fallback gracefully if database not yet migrated
-      });
-  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -64,8 +41,8 @@ export default function RegisterPage() {
       return;
     }
 
-    if (orgMode === "join" && !selectedOrgId.trim()) {
-      setError("Please select or enter an Organization ID to join");
+    if (orgMode === "join" && !orgCode.trim()) {
+      setError("Please enter the Organization Invite Code provided by your organization owner");
       setLoading(false);
       return;
     }
@@ -80,7 +57,7 @@ export default function RegisterPage() {
           password,
           organizationMode: orgMode,
           organizationName: orgMode === "create" ? orgName : undefined,
-          existingOrgId: orgMode === "join" ? selectedOrgId : undefined,
+          orgCode: orgMode === "join" ? orgCode.trim() : undefined,
         }),
       });
 
@@ -95,13 +72,19 @@ export default function RegisterPage() {
         return;
       }
 
-      setSuccess(
-        `Registration complete! Organization "${data.organization?.name}" assigned with role ${data.organization?.role}. Redirecting to login...`
-      );
+      if (orgMode === "create" && data.organization?.inviteCode) {
+        setSuccess(
+          `Registration complete! Organization "${data.organization.name}" created. Invite Code: ${data.organization.inviteCode}. Redirecting to login...`
+        );
+      } else {
+        setSuccess(
+          `Registration complete! Joined organization "${data.organization?.name}" as ${data.organization?.role}. Redirecting to login...`
+        );
+      }
 
       setTimeout(() => {
         router.push("/login");
-      }, 1500);
+      }, 2000);
     } catch {
       setError("An unexpected network error occurred.");
       setLoading(false);
@@ -120,11 +103,11 @@ export default function RegisterPage() {
             Create DataBridge Account
           </h1>
           <p className="text-xs text-[#A1A1AA] mt-1">
-            Provision a multi-tenant workspace with SQL Server database connectivity
+            Provision a secure multi-tenant workspace with database connectivity
           </p>
         </div>
 
-        {/* Form Card (L1) */}
+        {/* Form Card */}
         <div className="p-6 sm:p-8 rounded-[10px] bg-[#121215] border border-[rgba(255,255,255,0.08)] shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)] space-y-5">
           {error && (
             <div className="flex items-center gap-2 p-3 rounded-[6px] bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs">
@@ -198,7 +181,7 @@ export default function RegisterPage() {
             {/* Multi-Tenant Organization Selection */}
             <div className="pt-2 border-t border-[rgba(255,255,255,0.08)]">
               <label className="block text-xs font-semibold text-[#FAFAFA] mb-2">
-                Multi-Tenant Organization Assignment
+                Organization Assignment
               </label>
 
               {/* Mode Toggle */}
@@ -226,14 +209,14 @@ export default function RegisterPage() {
                   }`}
                 >
                   <Users className="w-3.5 h-3.5" />
-                  <span>Join Existing</span>
+                  <span>Join with Invite Code</span>
                 </button>
               </div>
 
               {orgMode === "create" ? (
                 <div>
                   <label className="block text-[11px] text-[#A1A1AA] mb-1">
-                    New Organization Name <span className="text-[#00E599] font-mono">(Role: OWNER)</span>
+                    New Organization Name <span className="text-[#00E599] font-mono">(You become OWNER)</span>
                   </label>
                   <div className="relative">
                     <Building2 className="absolute left-3 top-2.5 w-4 h-4 text-[#71717A]" />
@@ -245,38 +228,27 @@ export default function RegisterPage() {
                       className="w-full pl-9 pr-3 py-2 bg-[#18181B] border border-[rgba(255,255,255,0.08)] rounded-[6px] text-xs text-[#FAFAFA] placeholder-[#71717A] focus:outline-none focus:border-[#00E599] focus:ring-1 focus:ring-[#00E599] transition-colors"
                     />
                   </div>
-                  <p className="text-[10px] text-[#71717A] mt-1">
-                    An Organization record will be created and linked via OrganizationUser junction table.
+                  <p className="text-[10px] text-[#71717A] mt-1.5">
+                    A unique Organization Invite Code will be generated for you to invite your team members.
                   </p>
                 </div>
               ) : (
-                <div className="space-y-2">
+                <div className="space-y-1.5">
                   <label className="block text-[11px] text-[#A1A1AA] mb-1">
-                    Select Organization to Join <span className="text-[#00E599] font-mono">(Role: MEMBER)</span>
+                    Organization Invite Code <span className="text-[#00E599] font-mono">(Role: MEMBER)</span>
                   </label>
-                  {availableOrgs.length > 0 ? (
-                    <select
-                      value={selectedOrgId}
-                      onChange={(e) => setSelectedOrgId(e.target.value)}
-                      className="w-full px-3 py-2 bg-[#18181B] border border-[rgba(255,255,255,0.08)] rounded-[6px] text-xs text-[#FAFAFA] focus:outline-none focus:border-[#00E599] focus:ring-1 focus:ring-[#00E599] transition-colors font-mono"
-                    >
-                      {availableOrgs.map((org) => (
-                        <option key={org.id} value={org.id} className="bg-[#121215] text-[#FAFAFA]">
-                          {org.name} (ID: {org.id.slice(0, 8)}...)
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
+                  <div className="relative">
+                    <KeyRound className="absolute left-3 top-2.5 w-4 h-4 text-[#71717A]" />
                     <input
                       type="text"
-                      placeholder="Paste Organization ID"
-                      value={selectedOrgId}
-                      onChange={(e) => setSelectedOrgId(e.target.value)}
-                      className="w-full px-3 py-2 bg-[#18181B] border border-[rgba(255,255,255,0.08)] rounded-[6px] text-xs text-[#FAFAFA] placeholder-[#71717A] focus:outline-none focus:border-[#00E599] focus:ring-1 focus:ring-[#00E599] transition-colors font-mono"
+                      placeholder="e.g. TES-MFGZRW"
+                      value={orgCode}
+                      onChange={(e) => setOrgCode(e.target.value.toUpperCase())}
+                      className="w-full pl-9 pr-3 py-2 bg-[#18181B] border border-[rgba(255,255,255,0.08)] rounded-[6px] text-xs text-[#FAFAFA] placeholder-[#71717A] focus:outline-none focus:border-[#00E599] focus:ring-1 focus:ring-[#00E599] transition-colors font-mono uppercase tracking-wider"
                     />
-                  )}
+                  </div>
                   <p className="text-[10px] text-[#71717A]">
-                    You will be added to the OrganizationUser junction table as a Member.
+                    Enter the private invite code provided by your organization administrator.
                   </p>
                 </div>
               )}

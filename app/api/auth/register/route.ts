@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import bcrypt from "bcryptjs";
+import { generateOrgCode } from "@/lib/org-code";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { name, email, password, organizationMode, organizationName, existingOrgId } = body;
+    const { name, email, password, organizationMode, organizationName, orgCode, existingOrgId } = body;
 
     if (!email || !password) {
       return NextResponse.json(
@@ -41,15 +42,29 @@ export async function POST(req: Request) {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // Multi-tenant Organization Assignment logic
-    if (organizationMode === "join" && existingOrgId) {
-      // Validate existing organization
-      const targetOrg = await prisma.organization.findUnique({
-        where: { id: existingOrgId },
+    if (organizationMode === "join") {
+      const targetCode = String(orgCode || existingOrgId || "").trim().toUpperCase();
+
+      if (!targetCode) {
+        return NextResponse.json(
+          { error: "Please provide a valid Organization Invite Code to join" },
+          { status: 400 }
+        );
+      }
+
+      // Validate organization by invite code or ID
+      const targetOrg = await prisma.organization.findFirst({
+        where: {
+          OR: [
+            { inviteCode: targetCode },
+            { id: orgCode || existingOrgId },
+          ],
+        },
       });
 
       if (!targetOrg) {
         return NextResponse.json(
-          { error: "The specified Organization ID does not exist" },
+          { error: "Invalid Organization Invite Code. Please verify the code with your organization administrator." },
           { status: 404 }
         );
       }
@@ -87,6 +102,7 @@ export async function POST(req: Request) {
           organization: {
             id: result.organization.id,
             name: result.organization.name,
+            inviteCode: result.organization.inviteCode,
             role: result.membership.role,
           },
         },
@@ -96,6 +112,7 @@ export async function POST(req: Request) {
 
     // Default: Create a new Organization and assign user as OWNER
     const orgName = organizationName?.trim() || `${name?.trim() || "Enterprise"} Workspace`;
+    const newInviteCode = generateOrgCode(orgName);
 
     const result = await prisma.$transaction(async (tx) => {
       const user = await tx.user.create({
@@ -109,6 +126,7 @@ export async function POST(req: Request) {
       const organization = await tx.organization.create({
         data: {
           name: orgName,
+          inviteCode: newInviteCode,
         },
       });
 
@@ -135,6 +153,7 @@ export async function POST(req: Request) {
         organization: {
           id: result.organization.id,
           name: result.organization.name,
+          inviteCode: result.organization.inviteCode,
           role: result.membership.role,
         },
       },

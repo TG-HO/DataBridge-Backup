@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 
 export interface ChatMessage {
   id: string;
@@ -27,9 +27,9 @@ interface QuerySessionContextType {
   sessions: QuerySession[];
   activeSessionId: string | null;
   activeSession: QuerySession | null;
-  createNewSession: (initialConnIds?: string[]) => string;
+  createNewSession: (initialConnIds?: string[]) => Promise<string>;
   selectSession: (id: string) => void;
-  deleteSession: (id: string) => void;
+  deleteSession: (id: string) => Promise<void>;
   updateActiveSessionMessages: (
     messages: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])
   ) => void;
@@ -47,8 +47,6 @@ const DEFAULT_WELCOME_MESSAGE: ChatMessage = {
 
 const QuerySessionContext = createContext<QuerySessionContextType | null>(null);
 
-const STORAGE_KEY = "databridge_ai_query_sessions_v1";
-
 export function QuerySessionProvider({
   children,
   userId,
@@ -58,13 +56,13 @@ export function QuerySessionProvider({
   userId?: string;
   orgId?: string;
 }) {
-  const storageKey = `${STORAGE_KEY}_${orgId || "default"}_${userId || "anon"}`;
   const [sessions, setSessions] = useState<QuerySession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Helper to generate a fresh new session
-  const createNewSessionInternal = useCallback((initialConnIds: string[] = []): QuerySession => {
+  // Helper to generate a fallback local session structure
+  const createFallbackSession = useCallback((initialConnIds: string[] = []): QuerySession => {
     const id = `session-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
     return {
       id,
@@ -76,43 +74,66 @@ export function QuerySessionProvider({
     };
   }, []);
 
-  // 1. Initial Load from LocalStorage
+  // 1. Initial Load: Fetch persistent sessions from SQL Server DB
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem(storageKey);
-      if (stored) {
-        const parsed = JSON.parse(stored) as QuerySession[];
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setSessions(parsed);
-          setActiveSessionId(parsed[0].id);
-          setIsLoaded(true);
-          return;
+    if (!userId || !orgId) return;
+
+    let isMounted = true;
+    async function loadSessions() {
+      try {
+        const res = await fetch("/api/chat/sessions");
+        if (res.ok) {
+          const data = await res.json();
+          if (isMounted && Array.isArray(data.sessions) && data.sessions.length > 0) {
+            setSessions(data.sessions);
+            setActiveSessionId(data.sessions[0].id);
+            setIsLoaded(true);
+            return;
+          }
         }
+      } catch (e) {
+        console.warn("Failed to load query sessions from database:", e);
       }
-    } catch (e) {
-      console.warn("Failed to read query sessions from localStorage:", e);
+
+      // If no sessions exist in DB, create initial one via POST
+      try {
+        const createRes = await fetch("/api/chat/sessions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: "New Business Inquiry", selectedConnIds: [] }),
+        });
+        if (createRes.ok) {
+          const data = await createRes.json();
+          if (isMounted && data.session) {
+            setSessions([data.session]);
+            setActiveSessionId(data.session.id);
+            setIsLoaded(true);
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn("Failed to create initial database session:", e);
+      }
+
+      // Fallback
+      if (isMounted) {
+        const initialSession = createFallbackSession([]);
+        setSessions([initialSession]);
+        setActiveSessionId(initialSession.id);
+        setIsLoaded(true);
+      }
     }
 
-    // Default fallback initial session
-    const initialSession = createNewSessionInternal([]);
-    setSessions([initialSession]);
-    setActiveSessionId(initialSession.id);
-    setIsLoaded(true);
-  }, [storageKey, createNewSessionInternal]);
+    loadSessions();
 
-  // 2. Persist to LocalStorage whenever sessions change
-  useEffect(() => {
-    if (!isLoaded) return;
-    try {
-      localStorage.setItem(storageKey, JSON.stringify(sessions));
-    } catch (e) {
-      console.warn("Failed to persist query sessions to localStorage:", e);
-    }
-  }, [sessions, storageKey, isLoaded]);
+    return () => {
+      isMounted = false;
+    };
+  }, [userId, orgId, createFallbackSession]);
 
-  // 3. Create a new session
+  // 2. Create a new session in DB
   const createNewSession = useCallback(
-    (initialConnIds: string[] = []) => {
+    async (initialConnIds: string[] = []) => {
       // Re-use current empty session if active session already has no user messages
       const active = sessions.find((s) => s.id === activeSessionId);
       const hasUserMessages = active?.messages.some((m) => m.role === "user");
@@ -123,30 +144,59 @@ export function QuerySessionProvider({
               s.id === active.id ? { ...s, selectedConnIds: initialConnIds } : s
             )
           );
+          fetch(`/api/chat/sessions/${active.id}/messages`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ selectedConnIds: initialConnIds }),
+          }).catch(console.error);
         }
         return active.id;
       }
 
-      const newSession = createNewSessionInternal(initialConnIds);
+      try {
+        const res = await fetch("/api/chat/sessions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: "New Business Inquiry",
+            selectedConnIds: initialConnIds,
+          }),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.session) {
+            setSessions((prev) => [data.session, ...prev]);
+            setActiveSessionId(data.session.id);
+            return data.session.id;
+          }
+        }
+      } catch (e) {
+        console.error("Error creating session in database:", e);
+      }
+
+      // Fallback local session if DB request failed
+      const newSession = createFallbackSession(initialConnIds);
       setSessions((prev) => [newSession, ...prev]);
       setActiveSessionId(newSession.id);
       return newSession.id;
     },
-    [sessions, activeSessionId, createNewSessionInternal]
+    [sessions, activeSessionId, createFallbackSession]
   );
 
-  // 4. Select Session
+  // 3. Select Session
   const selectSession = useCallback((id: string) => {
     setActiveSessionId(id);
   }, []);
 
-  // 5. Delete Session
+  // 4. Delete Session from DB and state
   const deleteSession = useCallback(
-    (id: string) => {
+    async (id: string) => {
+      // Optimistic delete
       setSessions((prev) => {
         const remaining = prev.filter((s) => s.id !== id);
         if (remaining.length === 0) {
-          const fresh = createNewSessionInternal([]);
+          const fresh = createFallbackSession([]);
           setActiveSessionId(fresh.id);
           return [fresh];
         }
@@ -155,47 +205,76 @@ export function QuerySessionProvider({
         }
         return remaining;
       });
+
+      try {
+        await fetch(`/api/chat/sessions?id=${encodeURIComponent(id)}`, {
+          method: "DELETE",
+        });
+      } catch (e) {
+        console.error("Failed to delete session from database:", e);
+      }
     },
-    [activeSessionId, createNewSessionInternal]
+    [activeSessionId, createFallbackSession]
   );
 
-  // 6. Update Messages of the Active Session & Auto-generate Title
+  // 5. Update Messages of the Active Session & Sync to DB
   const updateActiveSessionMessages = useCallback(
     (messagesOrUpdater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => {
       setSessions((prev) => {
-        return prev.map((session) => {
-          if (session.id !== activeSessionId) return session;
+        const targetSession = prev.find((s) => s.id === activeSessionId);
+        if (!targetSession) return prev;
 
-          const updatedMessages =
-            typeof messagesOrUpdater === "function"
-              ? messagesOrUpdater(session.messages)
-              : messagesOrUpdater;
+        const updatedMessages =
+          typeof messagesOrUpdater === "function"
+            ? messagesOrUpdater(targetSession.messages)
+            : messagesOrUpdater;
 
-          // Auto-generate title from the first user query if still generic
-          let newTitle = session.title;
-          const firstUserMsg = updatedMessages.find((m) => m.role === "user");
-          if (
-            firstUserMsg &&
-            (session.title === "New Business Inquiry" || session.title.startsWith("New Query"))
-          ) {
-            const cleanPrompt = firstUserMsg.content.trim().replace(/^["']|["']$/g, "");
-            newTitle =
-              cleanPrompt.length > 38 ? cleanPrompt.substring(0, 38) + "..." : cleanPrompt;
+        // Auto-generate title from the first user query if still generic
+        let newTitle = targetSession.title;
+        const firstUserMsg = updatedMessages.find((m) => m.role === "user");
+        if (
+          firstUserMsg &&
+          (targetSession.title === "New Business Inquiry" || targetSession.title.startsWith("New Query"))
+        ) {
+          const cleanPrompt = firstUserMsg.content.trim().replace(/^["']|["']$/g, "");
+          newTitle =
+            cleanPrompt.length > 38 ? cleanPrompt.substring(0, 38) + "..." : cleanPrompt;
+        }
+
+        const updatedSession = {
+          ...targetSession,
+          title: newTitle,
+          updatedAt: Date.now(),
+          messages: updatedMessages,
+        };
+
+        // Debounce DB sync to avoid spamming while streaming
+        if (saveTimeoutRef.current) {
+          clearTimeout(saveTimeoutRef.current);
+        }
+
+        saveTimeoutRef.current = setTimeout(() => {
+          if (activeSessionId) {
+            fetch(`/api/chat/sessions/${activeSessionId}/messages`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                title: newTitle,
+                messages: updatedMessages,
+              }),
+            }).catch((err) =>
+              console.warn("Failed to persist messages to database:", err)
+            );
           }
+        }, 500);
 
-          return {
-            ...session,
-            title: newTitle,
-            updatedAt: Date.now(),
-            messages: updatedMessages,
-          };
-        });
+        return prev.map((s) => (s.id === activeSessionId ? updatedSession : s));
       });
     },
     [activeSessionId]
   );
 
-  // 7. Update Selected Connections for Active Session
+  // 6. Update Selected Connections for Active Session & Sync to DB
   const updateActiveSessionConnections = useCallback(
     (connIds: string[]) => {
       setSessions((prev) =>
@@ -205,12 +284,31 @@ export function QuerySessionProvider({
             : session
         )
       );
+
+      if (activeSessionId) {
+        fetch(`/api/chat/sessions/${activeSessionId}/messages`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ selectedConnIds: connIds }),
+        }).catch(console.error);
+      }
     },
     [activeSessionId]
   );
 
-  // 8. Clear Active Session Messages
+  // 7. Clear Active Session Messages
   const clearActiveSessionMessages = useCallback(() => {
+    const freshWelcome: ChatMessage = {
+      id: `welcome-${Date.now()}`,
+      role: "assistant",
+      content:
+        "Conversation history cleared. Ready for your next business inquiry across connected databases.",
+      timestamp: new Date().toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+    };
+
     setSessions((prev) =>
       prev.map((session) => {
         if (session.id !== activeSessionId) return session;
@@ -218,21 +316,21 @@ export function QuerySessionProvider({
           ...session,
           title: "New Business Inquiry",
           updatedAt: Date.now(),
-          messages: [
-            {
-              id: `welcome-${Date.now()}`,
-              role: "assistant",
-              content:
-                "Conversation history cleared. Ready for your next business inquiry across connected databases.",
-              timestamp: new Date().toLocaleTimeString([], {
-                hour: "2-digit",
-                minute: "2-digit",
-              }),
-            },
-          ],
+          messages: [freshWelcome],
         };
       })
     );
+
+    if (activeSessionId) {
+      fetch(`/api/chat/sessions/${activeSessionId}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "New Business Inquiry",
+          messages: [freshWelcome],
+        }),
+      }).catch(console.error);
+    }
   }, [activeSessionId]);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) || null;
