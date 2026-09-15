@@ -346,8 +346,9 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
         throw new Error("No response stream received from the server");
       }
 
-      const connectionIdHeader = res.headers.get("X-Connection-Id") || selectedConnIds[0] || "";
-      const rawQueryHeader = res.headers.get("X-Raw-Query")
+      const isDbQueried = res.headers.get("X-DB-Queried") === "true";
+      const connectionIdHeader = isDbQueried ? (res.headers.get("X-Connection-Id") || "") : "";
+      const rawQueryHeader = isDbQueried && res.headers.get("X-Raw-Query")
         ? decodeURIComponent(res.headers.get("X-Raw-Query")!)
         : "";
       const isWebSearchHeader = res.headers.get("X-Web-Search") === "true";
@@ -370,18 +371,27 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
           accumulated += chunk;
 
           updateActiveSessionMessages((prev) =>
-            prev.map((msg) =>
-              msg.id === assistantMsgId
-                ? {
+            prev.map((msg) => {
+              if (msg.id === assistantMsgId) {
+                return {
                   ...msg,
                   content: accumulated,
                   connectionId: connectionIdHeader,
                   rawQuery: rawQueryHeader,
                   isWebSearch: enableWebSearch || isWebSearchHeader,
+                  isDbQueried: isDbQueried,
                   isError: false,
-                }
-                : msg
-            )
+                };
+              }
+              if (msg.id === userMsgId && !isDbQueried) {
+                return {
+                  ...msg,
+                  targetedDatabases: [],
+                  isDbQueried: false,
+                };
+              }
+              return msg;
+            })
           );
         }
       }
@@ -685,7 +695,7 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
                         <div className="p-4 rounded-[10px] bg-[#18181B] text-[#FAFAFA] text-xs shadow-sm max-w-xl leading-relaxed border border-white/[0.08]">
                           {msg.content}
                         </div>
-                        {msg.targetedDatabases && msg.targetedDatabases.length > 0 && (
+                        {msg.targetedDatabases && msg.targetedDatabases.length > 0 ? (
                           <div className="flex flex-wrap items-center justify-end gap-1.5 text-[10px] text-[#A1A1AA] font-mono">
                             <span className="text-[#A1A1AA]/60">Queried:</span>
                             {msg.targetedDatabases.map((db) => (
@@ -697,7 +707,15 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
                               </span>
                             ))}
                           </div>
-                        )}
+                        ) : msg.isWebSearch ? (
+                          <div className="flex flex-wrap items-center justify-end gap-1.5 text-[10px] font-mono">
+                            <span className="text-[#A1A1AA]/60">Mode:</span>
+                            <span className="px-1.5 py-0.5 rounded-[4px] bg-[#00E599]/15 border border-[#00E599]/30 text-[#00E599] font-medium flex items-center gap-1">
+                              <Globe className="w-2.5 h-2.5 text-[#00E599]" />
+                              Live Web Intelligence
+                            </span>
+                          </div>
+                        ) : null}
                       </div>
                     ) : (
                       /* Assistant Card */
@@ -775,7 +793,7 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
                                       <span>Live Web Intelligence</span>
                                     </span>
                                   )}
-                                  {msg.connectionId && (
+                                  {msg.isDbQueried !== false && Boolean(msg.connectionId) && (
                                     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-[6px] bg-[#0EA5E9]/15 border border-[#0EA5E9]/35 text-[#0EA5E9] text-[11px] font-mono font-semibold shadow-sm">
                                       <Database className="w-3 h-3 text-[#0EA5E9]" />
                                       <span>Internal Database</span>
@@ -844,26 +862,26 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
                                         </div>
                                         <span className="text-[10px] text-[#A1A1AA] font-mono">Live Intelligence</span>
                                       </div>
-                                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                                         {webSources.map((src, i) => (
                                           <a
                                             key={i}
                                             href={src.url}
                                             target="_blank"
                                             rel="noopener noreferrer"
-                                            className="group flex flex-col p-2.5 rounded-[6px] bg-[#18181B] hover:bg-[#222226] border border-white/[0.06] hover:border-[#00E599]/40 transition-all text-left"
+                                            className="group flex flex-col p-3 rounded-[8px] bg-[#18181B] hover:bg-[#202024] border border-white/[0.06] hover:border-[#00E599]/40 transition-all text-left shadow-sm"
                                           >
-                                            <div className="flex items-center justify-between gap-1 mb-1">
-                                              <span className="text-[10px] font-mono text-[#00E599] uppercase tracking-wider truncate max-w-[140px]">
-                                                {src.domain || "Web Source"}
+                                            <div className="flex items-center justify-between gap-1 mb-1.5">
+                                              <span className="text-[10px] font-mono text-[#00E599] uppercase tracking-wider truncate max-w-[170px] font-bold">
+                                                [Source {i + 1}] {src.domain || "Web Source"}
                                               </span>
                                               <ExternalLink className="w-3 h-3 text-[#A1A1AA] group-hover:text-[#00E599] transition-colors shrink-0" />
                                             </div>
-                                            <span className="text-xs font-medium text-[#FAFAFA] group-hover:text-[#00E599] transition-colors line-clamp-1">
+                                            <span className="text-xs font-semibold text-[#FAFAFA] group-hover:text-[#00E599] transition-colors line-clamp-2 leading-snug">
                                               {src.title}
                                             </span>
                                             {src.snippet && (
-                                              <p className="text-[11px] text-[#A1A1AA] mt-1 line-clamp-2 leading-relaxed">
+                                              <p className="text-[11px] text-[#A1A1AA] mt-1.5 line-clamp-3 leading-relaxed">
                                                 {src.snippet}
                                               </p>
                                             )}
@@ -875,24 +893,26 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
                                 </div>
 
                                 {/* Dynamic Auto-Visualization (FR-11, FR-12, FR-13) */}
-                                <DynamicDataVisualizer
-                                  recommendedVisualization={parsedViz.recommendedVisualization}
-                                  chartConfig={parsedViz.chartConfig}
-                                  data={parsedViz.data}
-                                  summary={parsedViz.summary}
-                                  rawQuery={msg.rawQuery}
-                                  connectionId={msg.connectionId || selectedConnIds[0]}
-                                  onPin={() =>
-                                    setPinTargetWidget({
-                                      title: parsedViz.chartConfig?.title || "Analytics Visualization",
-                                      chartType: parsedViz.recommendedVisualization,
-                                      chartConfig: parsedViz.chartConfig || {},
-                                      rawQuery: msg.rawQuery || "",
-                                      connectionId: msg.connectionId || selectedConnIds[0] || "",
-                                      data: parsedViz.data,
-                                    })
-                                  }
-                                />
+                                {parsedViz.data && parsedViz.data.length > 0 && (
+                                  <DynamicDataVisualizer
+                                    recommendedVisualization={parsedViz.recommendedVisualization}
+                                    chartConfig={parsedViz.chartConfig}
+                                    data={parsedViz.data}
+                                    summary={parsedViz.summary}
+                                    rawQuery={msg.rawQuery}
+                                    connectionId={msg.connectionId || ""}
+                                    onPin={() =>
+                                      setPinTargetWidget({
+                                        title: parsedViz.chartConfig?.title || "Analytics Visualization",
+                                        chartType: parsedViz.recommendedVisualization,
+                                        chartConfig: parsedViz.chartConfig || {},
+                                        rawQuery: msg.rawQuery || "",
+                                        connectionId: msg.connectionId || "",
+                                        data: parsedViz.data,
+                                      })
+                                    }
+                                  />
+                                )}
                               </div>
                             );
                           }

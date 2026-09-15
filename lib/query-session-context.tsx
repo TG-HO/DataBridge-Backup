@@ -21,6 +21,7 @@ export interface ChatMessage {
   errorMessage?: string;
   isWebSearch?: boolean;
   webSources?: WebSource[];
+  isDbQueried?: boolean;
 }
 
 export interface QuerySession {

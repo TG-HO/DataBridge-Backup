@@ -1001,53 +1001,35 @@ async function executeDatabaseQuery(
  */
 /**
  * Determines whether database execution is required when web search is active.
- * If the user's prompt mentions internal company data, transactions, inventory, sales,
- * or asks to compare internal metrics with external competitor data, return true.
- * If the user's prompt is strictly external competitor analysis or general web queries, return false.
+ * - If the user is asking about external entities, competitors, industry news, market benchmarks,
+ *   social media campaigns, or general topics without requesting internal records, return false.
+ * - Return true ONLY if the prompt explicitly asks for internal company records/data
+ *   (e.g., "our sales", "our revenue", "in our database", "compare our orders", "our customers", "our inventory").
  */
 function isInternalDatabaseQueryNeeded(prompt: string, connectionsCount: number): boolean {
   if (connectionsCount === 0) return false;
 
-  const lower = prompt.toLowerCase();
+  const clean = prompt.toLowerCase().trim();
 
-  // Strong indicators that internal company database querying is needed:
-  const internalKeywords = [
-    "our", "internal", "we", "us", "my", "company", "in-house",
-    "sales", "revenue", "order", "orders", "customer", "customers",
-    "inventory", "stock", "transaction", "transactions", "database",
-    "db", "table", "record", "records", "metric", "metrics",
-    "compare with our", "against our", "vs our", "our performance",
-    "branch", "branches", "employee", "employees", "profit", "margin"
+  // Explicit phrases indicating the user wants their internal database queried:
+  const explicitInternalPatterns = [
+    // Direct requests to inspect the database / schema / records
+    /\b(in|from|check|query|search|look\s*up)\s+(our|the|my)\s+(database|db|tables?|records?|system)\b/i,
+    /\b(our|my|internal|company|in-house)\s+([\w-]+\s+){0,3}(sales|revenue|profit|margin|transactions?|orders?|invoices?|customers?|clients?|inventory|stock|products?|stores?|branches?|employees?|metrics?|figures?|performance|numbers?|financials?|earnings|turnover|kpis?|data)\b/i,
+    // Comparisons that explicitly mention internal numbers or metrics
+    /\b(compare|versus|vs\.?|against|benchmark)\s+(our|my|company|internal)\b/i,
+    /\b(how\s+are\s+we\s+doing|how\s+much\s+did\s+we\s+sell|what\s+is\s+our\s+(total|revenue|sales?|turnover|profit))\b/i,
+    /\b(show|get|fetch|list|display)\s+(our|my)\s+(data|records|numbers|sales|orders|customers)\b/i,
   ];
 
-  const hasInternalKeyword = internalKeywords.some((kw) => {
-    const regex = new RegExp(`\\b${kw}\\b`, "i");
-    return regex.test(lower);
-  });
+  const hasExplicitInternalRequest = explicitInternalPatterns.some((pattern) => pattern.test(clean));
 
-  if (hasInternalKeyword) return true;
-
-  // Pure external competitor / market research indicators (no database query required)
-  const externalOnlyPatterns = [
-    /^who are (the )?(top )?competitors/i,
-    /^competitor analysis/i,
-    /^analyze competitor/i,
-    /^what is the market share of /i,
-    /^overview of /i,
-    /^latest news on /i,
-    /^current price of /i,
-    /^crude oil price/i,
-    /^global petroleum/i,
-    /^market trends in /i,
-    /^compare [a-zA-Z0-9\s]+ and [a-zA-Z0-9\s]+$/i,
-  ];
-
-  if (externalOnlyPatterns.some((pat) => pat.test(lower.trim()))) {
-    return false;
+  if (hasExplicitInternalRequest) {
+    return true;
   }
 
-  // If user selected databases and prompt is not explicitly external-only, query the DB
-  return true;
+  // If the prompt is about competitors, market, campaigns, public companies, or general research, DO NOT query DB
+  return false;
 }
 
 /**
@@ -1218,9 +1200,10 @@ export async function POST(req: Request) {
       for (const [idx, s] of webSources.entries()) {
         allRows.push({
           Source_Index: idx + 1,
-          Entity_Or_Topic: s.title.slice(0, 45),
+          Entity_Or_Topic: s.title.slice(0, 48),
           Domain: s.domain || "Web Source",
-          Intelligence_Snippet: s.snippet.slice(0, 140) + "...",
+          Intelligence_Summary: s.snippet.slice(0, 180),
+          Verification: "Live Web Citation",
         });
       }
     }
@@ -1235,19 +1218,19 @@ export async function POST(req: Request) {
 
     const fallbackVisualization = {
       summary: enableWebSearch
-        ? `## Executive Market & Competitor Intelligence: ${prompt}\n\nRetrieved **${webSources.length} verified web sources**${connections.length > 0 && needDbQuery ? ` and internal data records from **${connectedDbNames}**` : ""} addressing "${prompt}".\n\n### Strategic Business Insights:\n- **Market Landscape:** Synthesized external market intelligence from verified sources across ${webSources.map(s => s.domain).filter(Boolean).slice(0, 3).join(", ") || "the web"}.\n- **Competitor Analysis:** Evaluates market dynamics, competitive positioning, and strategic benchmarks for executive decision-making.\n- **Operational Guidance:** Cross-reference external findings with internal strategies to optimize pricing, expansion, and commercial competitiveness.`
+        ? `## Executive Market & Competitor Intelligence: ${prompt}\n\nRetrieved **${webSources.length} verified web sources**${connections.length > 0 && needDbQuery ? ` and internal data records from **${connectedDbNames}**` : ""} addressing "${prompt}".\n\n### 1. Market Overview & Competitive Landscape\nBased on verified intelligence from **[Source 1: ${webSources[0]?.domain || "Web"}]** and **[Source 2: ${webSources[1]?.domain || "Web"}]**, top industry operators maintain extensive distribution and retail operations with strategic marketing differentiation.\n\n### 2. Recent Campaigns & Marketing Highlights\n${webSources.map((s, i) => `- **[Source ${i + 1}: ${s.domain || "Source"}] (${s.title}):** ${s.snippet}`).join("\n\n")}\n\n### 3. Strategic Guidance & Business Recommendations\n- **Digital Agility:** Monitor competitors' promotional campaigns and award-winning initiatives [Source 1] to identify rapid counter-positioning opportunities.\n- **Brand Positioning:** Competitors are expanding loyalty programs, digital cards, and retail convenience to capture customer retention.\n- **Commercial Benchmarking:** Cross-reference public campaign strategies to optimize customer acquisition and marketing spend.`
         : `## Executive Summary: ${prompt}\n\nRetrieved ${allRows.length} verified records from **${connectedDbNames}** answering "${prompt}".\n\n### Strategic Business Insights:\n- **Verified Data:** Live data records retrieved directly from [${connectedDbNames}].\n- **Auto-Visualization:** Formatted dynamically for chart analysis, table inspection, and multi-format exports.\n- **Actionable Takeaways:** Cross-reference trends or pin this visual to your custom workspace dashboard.`,
-      recommendedVisualization: numericKeys.length > 0 ? "BAR" : "TABLE",
+      recommendedVisualization: "TABLE",
       chartConfig: {
-        xAxisKey: primaryXKey,
-        dataKeys: numericKeys.length > 0 ? numericKeys.slice(0, 2) : ["Source_Index"],
+        xAxisKey: "Entity_Or_Topic",
+        dataKeys: ["Source_Index"],
         title: prompt.slice(0, 45) || (enableWebSearch ? "Competitor & Market Intelligence" : "Analytics Overview"),
       },
       data: allRows,
       webSources: webSources.length > 0 ? webSources : undefined,
       isWebSearch: enableWebSearch,
-      rawQuery: primaryRawQuery,
-      connectionId: primaryConnectionId,
+      rawQuery: (needDbQuery && connections.length > 0) ? primaryRawQuery : "",
+      connectionId: (needDbQuery && connections.length > 0) ? primaryConnectionId : "",
     };
 
     if (modelInfo.isConfigured && modelInfo.model) {
@@ -1268,17 +1251,25 @@ EXECUTIVE BUSINESS INTELLIGENCE & AUTO-VISUALIZATION MANDATE:
 You are an executive data analyst preparing business insights ${connections.length > 0 && needDbQuery ? `from target database(s): [${connectedDbNames}]` : ""}${enableWebSearch ? ` and live verified web intelligence.` : "."}
 
 ${enableWebSearch ? `
-WEB SEARCH & COMPETITOR ANALYSIS MANDATE:
-- Synthesize real-time competitor strategies, market share, product offerings, pricing dynamics, and industry benchmarks from the provided live web sources.
-- If internal database records are also provided, perform a rigorous comparative analysis (e.g. internal company revenue vs competitor scale, local pricing vs national benchmarks).
-- If no internal database query was required, focus completely on delivering high-impact competitor research, market trends, and SWOT insights.
-- You MUST populate "webSources" in your output JSON with the verified sources provided.
+WEB SEARCH, COMPETITOR ANALYSIS & CITATION MANDATES:
+1. DEEP COMPREHENSIVE SYNTHESIS: You must thoroughly analyze the provided web sources, including all article extracts, snippets, campaign details, awards, press releases, and market statistics.
+2. COMPOSE A PROPER, STRUCTURED EXECUTIVE REPORT: Structure your markdown response with clear, professional sections:
+   ### 1. Executive Summary & Market Landscape
+   ### 2. Deep Competitor Breakdown (e.g. Shell Pakistan vs PSO Pakistan)
+   ### 3. Recent Campaigns, Social Media & Marketing Initiatives
+   ### 4. Strategic Business Guidance & Actionable Recommendations
+3. MANDATORY INLINE CITATIONS: You MUST cite your sources inline throughout your narrative using bracketed citations, e.g., "[Source 1: psopk.com]", "[Source 2]", "[Source 3: facebook.com]", whenever presenting facts, campaigns, awards, market metrics, or initiatives.
+4. STRICT SOURCE INTEGRITY:
+   - If NO internal database was queried (pure web search), you MUST NOT invent, hallucinate, or mention internal company sales, revenue, transaction volume ($1.84M, etc.), or fake internal database metrics.
+   - Do NOT say "the supplied web sources do not contain specifics" if information or snippets are present. Synthesize every available detail from the sources.
+   - If internal database records are provided, integrate both internal metrics and external benchmarks seamlessly.
+5. In your output JSON, populate "webSources" with the verified sources provided.
 ` : ""}
 
 MANDATORY RESPONSE FORMAT (STRICT JSON SCHEMA):
 You MUST formulate your response as a valid, well-formed JSON object matching this exact schema:
 {
-  "summary": "Executive summary markdown string answering the user's question, citing external web sources and/or internal databases, with 2-3 strategic takeaways under '### Strategic Business Insights'.",
+  "summary": "Full markdown response with executive sections, bullet points, and inline citations [Source N: domain] answering the user's question.",
   "recommendedVisualization": "BAR" | "LINE" | "AREA" | "PIE" | "TABLE",
   "chartConfig": {
     "xAxisKey": "string (the primary categorical, entity, competitor, or date column from data)",
@@ -1286,7 +1277,7 @@ You MUST formulate your response as a valid, well-formed JSON object matching th
     "title": "string (concise descriptive chart title)"
   },
   "data": [
-    /* Array of clean data objects. For competitor analysis, include competitors/entities and their metrics (e.g. MarketShare, Stations, PricingEstimate) or clean tabular comparison rows */
+    /* Array of clean data objects. For competitor analysis without internal DB, include competitors/sources and their summary/metrics */
   ],
   "webSources": [
     /* Array of web sources matching { "title": string, "url": string, "snippet": string, "domain": string } */
@@ -1295,11 +1286,8 @@ You MUST formulate your response as a valid, well-formed JSON object matching th
 }
 
 VISUALIZATION RULES:
-- Use "BAR" for category comparisons (competitors, customers, products, departments, status).
-- Use "LINE" for chronological trends over time, dates, or months.
-- Use "AREA" for volume or cumulative growth over time.
-- Use "PIE" for proportion breakdowns or percentage share (up to 7 categories).
-- Use "TABLE" for detailed tabular listings, audit trails, or non-numeric data.
+- If internal database query was performed, use "BAR" for category comparisons, "LINE" for trends, etc.
+- If pure web search (no internal DB), use "TABLE" to display the verified sources, competitor benchmarks, or key comparative points.
 - Output ONLY the JSON object. Do not add introductory or concluding conversational chat outside the JSON.`,
               messages: [
                 ...compactHistory,
@@ -1313,11 +1301,11 @@ VISUALIZATION RULES:
                 }] : []),
                 ...(enableWebSearch && webSources.length > 0 ? [{
                   role: "assistant" as const,
-                  content: `Live Web Intelligence (${webSources.length} sources retrieved from ${webProvider}):\n${webSources.map((s, i) => `[Source ${i + 1}] Title: ${s.title}\nDomain: ${s.domain || ""}\nURL: ${s.url}\nSnippet: ${s.snippet}`).join("\n\n")}`,
+                  content: `Live Web Intelligence (${webSources.length} sources retrieved from ${webProvider}):\n\n${webSources.map((s, i) => `[Source ${i + 1}] Title: ${s.title}\nDomain: ${s.domain || "Web"}\nURL: ${s.url}\nSummary / Snippet: ${s.snippet}\n${s.content ? `Extracted Full Page Article Content:\n${s.content.slice(0, 1800)}` : ""}`).join("\n\n---\n\n")}`,
                 }] : []),
                 {
                   role: "user",
-                  content: `Please answer the question: "${prompt}". Return ONLY the strict JSON object with "summary", "recommendedVisualization", "chartConfig", "data", and "webSources" based on the provided data.`,
+                  content: `Please answer the question: "${prompt}". Return ONLY the strict JSON object with "summary", "recommendedVisualization", "chartConfig", "data", and "webSources" based on the provided data. Remember to include inline citations [Source N: domain] throughout your response.`,
                 },
               ],
               onFinish({ text }) {
@@ -1360,8 +1348,8 @@ VISUALIZATION RULES:
         headers: {
           "Content-Type": "text/plain; charset=utf-8",
           "Transfer-Encoding": "chunked",
-          "X-Connection-Id": primaryConnectionId,
-          "X-Raw-Query": encodeURIComponent(primaryRawQuery),
+          "X-Connection-Id": (needDbQuery && connections.length > 0) ? primaryConnectionId : "",
+          "X-Raw-Query": (needDbQuery && connections.length > 0) ? encodeURIComponent(primaryRawQuery) : "",
           "X-Web-Search": enableWebSearch ? "true" : "false",
           "X-DB-Queried": (needDbQuery && connections.length > 0) ? "true" : "false",
         },
@@ -1386,8 +1374,8 @@ VISUALIZATION RULES:
       headers: {
         "Content-Type": "text/plain; charset=utf-8",
         "Transfer-Encoding": "chunked",
-        "X-Connection-Id": primaryConnectionId,
-        "X-Raw-Query": encodeURIComponent(primaryRawQuery),
+        "X-Connection-Id": (needDbQuery && connections.length > 0) ? primaryConnectionId : "",
+        "X-Raw-Query": (needDbQuery && connections.length > 0) ? encodeURIComponent(primaryRawQuery) : "",
         "X-Web-Search": enableWebSearch ? "true" : "false",
         "X-DB-Queried": (needDbQuery && connections.length > 0) ? "true" : "false",
       },
