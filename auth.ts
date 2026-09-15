@@ -73,7 +73,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           if (membership) {
             token.orgId = membership.orgId;
             token.orgName = membership.organization.name;
-            token.orgCode = membership.organization.inviteCode;
+            token.orgCode = (membership.organization as any).inviteCode;
             token.role = membership.role;
           }
         } catch (e) {

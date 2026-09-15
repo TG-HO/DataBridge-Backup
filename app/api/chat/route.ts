@@ -10,6 +10,7 @@ import { Client as PgClient } from "pg";
 import { createConnectedPgClient } from "@/lib/pg-client";
 import { MongoClient } from "mongodb";
 import { getOrCreateFirebaseFirestore } from "@/lib/firebase-server";
+import { executeWebSearch, WebSearchResult } from "@/lib/web-search";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +25,7 @@ interface ChatRequestBody {
   connectionId?: string;
   connectionIds?: string[];
   chatHistory?: ChatMessage[];
+  enableWebSearch?: boolean;
 }
 
 /**
@@ -997,6 +999,64 @@ async function executeDatabaseQuery(
  * 4. Merges all retrieved datasets into an executive business intelligence synthesis.
  * 5. Strictly hides raw SQL queries and technical schemas from user view.
  */
+/**
+ * Determines whether database execution is required when web search is active.
+ * If the user's prompt mentions internal company data, transactions, inventory, sales,
+ * or asks to compare internal metrics with external competitor data, return true.
+ * If the user's prompt is strictly external competitor analysis or general web queries, return false.
+ */
+function isInternalDatabaseQueryNeeded(prompt: string, connectionsCount: number): boolean {
+  if (connectionsCount === 0) return false;
+
+  const lower = prompt.toLowerCase();
+
+  // Strong indicators that internal company database querying is needed:
+  const internalKeywords = [
+    "our", "internal", "we", "us", "my", "company", "in-house",
+    "sales", "revenue", "order", "orders", "customer", "customers",
+    "inventory", "stock", "transaction", "transactions", "database",
+    "db", "table", "record", "records", "metric", "metrics",
+    "compare with our", "against our", "vs our", "our performance",
+    "branch", "branches", "employee", "employees", "profit", "margin"
+  ];
+
+  const hasInternalKeyword = internalKeywords.some((kw) => {
+    const regex = new RegExp(`\\b${kw}\\b`, "i");
+    return regex.test(lower);
+  });
+
+  if (hasInternalKeyword) return true;
+
+  // Pure external competitor / market research indicators (no database query required)
+  const externalOnlyPatterns = [
+    /^who are (the )?(top )?competitors/i,
+    /^competitor analysis/i,
+    /^analyze competitor/i,
+    /^what is the market share of /i,
+    /^overview of /i,
+    /^latest news on /i,
+    /^current price of /i,
+    /^crude oil price/i,
+    /^global petroleum/i,
+    /^market trends in /i,
+    /^compare [a-zA-Z0-9\s]+ and [a-zA-Z0-9\s]+$/i,
+  ];
+
+  if (externalOnlyPatterns.some((pat) => pat.test(lower.trim()))) {
+    return false;
+  }
+
+  // If user selected databases and prompt is not explicitly external-only, query the DB
+  return true;
+}
+
+/**
+ * Core /api/chat Route Handler
+ * Implements:
+ * 1. Live Web Search & Competitor Analysis (DuckDuckGo, Tavily, Serper)
+ * 2. Smart Database Query Routing (executes internal SQL queries only when required)
+ * 3. Unified Business Intelligence Synthesis with verified citations and auto-visualization
+ */
 export async function POST(req: Request) {
   try {
     const session = await auth();
@@ -1010,6 +1070,7 @@ export async function POST(req: Request) {
     const body: ChatRequestBody = await req.json();
     const prompt = (body.prompt || body.message || "").trim();
     const chatHistory = body.chatHistory || [];
+    const enableWebSearch = Boolean(body.enableWebSearch);
 
     // Parse requested connection IDs
     const rawIds = Array.isArray(body.connectionIds) && body.connectionIds.length > 0
@@ -1025,85 +1086,102 @@ export async function POST(req: Request) {
       );
     }
 
-    if (requestedConnectionIds.length === 0) {
+    // If web search is disabled, at least one database connection is required
+    if (!enableWebSearch && requestedConnectionIds.length === 0) {
       return NextResponse.json(
-        { error: "Please select at least one database connection." },
+        { error: "Please select at least one database connection, or activate Web Search." },
         { status: 400 }
       );
     }
 
-    console.log(`\n================================================================`);
-    console.log(`[DataBridge API] 🚀 New Query Request: "${prompt}"`);
-    console.log(`[DataBridge API] Target Connection IDs: ${requestedConnectionIds.join(", ")}`);
-    console.log(`================================================================`);
-
-    // 1. Retrieve all requested DbConnections and verify tenant ownership
-    const connections = await prisma.dbConnection.findMany({
-      where: {
-        id: { in: requestedConnectionIds },
-        organization: {
-          members: {
-            some: {
-              userId: session.user.id,
+    // 1. Retrieve requested DbConnections and verify tenant ownership
+    let connections: any[] = [];
+    if (requestedConnectionIds.length > 0) {
+      connections = await prisma.dbConnection.findMany({
+        where: {
+          id: { in: requestedConnectionIds },
+          organization: {
+            members: {
+              some: {
+                userId: session.user.id,
+              },
             },
           },
         },
-      },
-      include: {
-        organization: true,
-      },
-    });
-
-    if (connections.length === 0) {
-      console.warn(`[DataBridge API] ❌ No valid authorized connections found for IDs:`, requestedConnectionIds);
-      return NextResponse.json(
-        {
-          error:
-            "Forbidden: The requested database connection(s) do not exist or do not belong to your organization.",
+        include: {
+          organization: true,
         },
-        { status: 403 }
-      );
+      });
+
+      if (connections.length === 0 && !enableWebSearch) {
+        console.warn(`[DataBridge API] ❌ No valid authorized connections found for IDs:`, requestedConnectionIds);
+        return NextResponse.json(
+          {
+            error:
+              "Forbidden: The requested database connection(s) do not exist or do not belong to your organization.",
+          },
+          { status: 403 }
+        );
+      }
+    }
+
+    // Smart routing: determine if database query is required
+    const needDbQuery = !enableWebSearch
+      ? true
+      : isInternalDatabaseQueryNeeded(prompt, connections.length);
+
+    console.log(`\n================================================================`);
+    console.log(`[DataBridge API] 🚀 New Query Request: "${prompt}"`);
+    console.log(`[DataBridge API] Web Search: ${enableWebSearch ? "ENABLED" : "DISABLED"} | DB Query Required: ${needDbQuery}`);
+    console.log(`[DataBridge API] Active Databases: ${connections.map(c => `${c.name} [${c.dbType}]`).join(", ") || "(None - External Research)"}`);
+    console.log(`================================================================`);
+
+    // 2. Execute Live Web Search if enabled
+    let webSources: WebSearchResult[] = [];
+    let webProvider = "none";
+    if (enableWebSearch) {
+      try {
+        console.log(`[DataBridge API] 🌐 Executing Live Web Search for: "${prompt}"...`);
+        const searchRes = await executeWebSearch(prompt, 6);
+        webSources = searchRes.results;
+        webProvider = searchRes.provider;
+        console.log(`[DataBridge API] 🌐 Web Search returned ${webSources.length} sources via ${webProvider}`);
+      } catch (err) {
+        console.warn("[DataBridge API] ⚠️ Web Search error:", err);
+      }
     }
 
     const modelInfo = getLanguageModel();
-    console.log(`[DataBridge API] Active Databases: ${connections.map(c => `${c.name} [${c.dbType}]`).join(", ")}`);
     console.log(`[DataBridge API] AI Model Provider: ${modelInfo.providerName} | Model: ${modelInfo.modelName} | Configured: ${modelInfo.isConfigured}`);
 
-    // ----------------------------------------------------------------
-    // STEP 1 & 2: Sequential One-by-One Query Generation & Execution
-    // Guarantees zero syntax collision and prevents ambiguous column errors
-    // ----------------------------------------------------------------
+    // 3. Sequential One-by-One Database Query Generation & Execution (Only if required)
     const executionResults: Array<{ sourceName: string; dbType: string; results: unknown[] }> = [];
     const rawQueriesMap: Record<string, string> = {};
 
-    // Compact context from immediate previous turns to resolve references (e.g., 'who is this customer?')
-    const recentTurns = chatHistory.slice(-2);
-    const recentContextSummary = recentTurns
-      .map((t) => `${t.role.toUpperCase()}: ${t.content.slice(0, 250)}`)
-      .join("\n");
+    if (needDbQuery && connections.length > 0) {
+      const recentTurns = chatHistory.slice(-2);
+      const recentContextSummary = recentTurns
+        .map((t) => `${t.role.toUpperCase()}: ${t.content.slice(0, 250)}`)
+        .join("\n");
 
-    for (const conn of connections) {
-      // 1. Generate query specifically for THIS database in isolation
-      const rawQuery = await generateQueryForSingleDatabase(conn, prompt, modelInfo, recentContextSummary);
-      rawQueriesMap[conn.id] = rawQuery;
-      const isNoSql =
-        conn.dbType.toLowerCase() === "mongodb" ||
-        conn.dbType.toLowerCase() === "firebase" ||
-        conn.dbType.toLowerCase() === "firestore";
+      for (const conn of connections) {
+        const rawQuery = await generateQueryForSingleDatabase(conn, prompt, modelInfo, recentContextSummary);
+        rawQueriesMap[conn.id] = rawQuery;
+        const isNoSql =
+          conn.dbType.toLowerCase() === "mongodb" ||
+          conn.dbType.toLowerCase() === "firebase" ||
+          conn.dbType.toLowerCase() === "firestore";
 
-      const safeQuery = isNoSql
-        ? (isSafeReadOnlyNoSqlQuery(rawQuery) ? rawQuery : getSafeFallbackQuery(conn, prompt))
-        : (isSafeReadOnlyQuery(rawQuery) ? rawQuery : getSafeFallbackQuery(conn, prompt));
+        const safeQuery = isNoSql
+          ? (isSafeReadOnlyNoSqlQuery(rawQuery) ? rawQuery : getSafeFallbackQuery(conn, prompt))
+          : (isSafeReadOnlyQuery(rawQuery) ? rawQuery : getSafeFallbackQuery(conn, prompt));
 
-      // 2. Execute query on THIS database
-      const result = await executeDatabaseQuery(conn, safeQuery, prompt);
-      executionResults.push(result);
+        const result = await executeDatabaseQuery(conn, safeQuery, prompt);
+        executionResults.push(result);
+      }
     }
 
-    // ----------------------------------------------------------------
-    // STEP 3: Unified Executive Business Intelligence Presentation & Auto-Visualization (FR-11)
-    // ----------------------------------------------------------------
-    // Prune previous chat history so it doesn't inflate token context or cause repetitive answers
+    // 4. Unified Executive Business Intelligence Presentation & Auto-Visualization
     const compactHistory = chatHistory.slice(-4).map((m) => ({
       role: m.role as "user" | "assistant",
       content: m.role === "assistant" && m.content.length > 400
@@ -1117,15 +1195,13 @@ export async function POST(req: Request) {
       records: er.results,
     }));
 
-    const connectedDbNames = connections.map((c) => `${c.name} (${c.dbType.toUpperCase()})`).join(", ");
+    const connectedDbNames = connections.length > 0
+      ? connections.map((c) => `${c.name} (${c.dbType.toUpperCase()})`).join(", ")
+      : "No internal databases (External Web Research)";
     const primaryConnectionId = connections[0]?.id || "";
     const primaryRawQuery = rawQueriesMap[primaryConnectionId] || "";
 
-    // ----------------------------------------------------------------
-    // Pre-calculate Autonomous Structured Output Fallback
-    // Guarantees that if the upstream LLM fails, rate-limits (429), or times out,
-    // the user ALWAYS receives verified database records and working visualizations.
-    // ----------------------------------------------------------------
+    // Assemble rows for visualization
     const allRows: Record<string, unknown>[] = [];
     for (const er of executionResults) {
       if (Array.isArray(er.results)) {
@@ -1137,30 +1213,46 @@ export async function POST(req: Request) {
       }
     }
 
+    // If pure web search with no DB rows, generate structured rows from web sources
+    if (allRows.length === 0 && webSources.length > 0) {
+      for (const [idx, s] of webSources.entries()) {
+        allRows.push({
+          Source_Index: idx + 1,
+          Entity_Or_Topic: s.title.slice(0, 45),
+          Domain: s.domain || "Web Source",
+          Intelligence_Snippet: s.snippet.slice(0, 140) + "...",
+        });
+      }
+    }
+
     const firstRow = allRows[0] || {};
     const keys = Object.keys(firstRow).filter((k) => k !== "id" && k !== "_id");
-    const primaryXKey = keys[0] || "Category";
+    const primaryXKey = keys[0] || (enableWebSearch ? "Entity_Or_Topic" : "Category");
     const numericKeys = keys.filter((k) => {
       const val = firstRow[k];
       return typeof val === "number" || (!isNaN(Number(val)) && val !== null && val !== "");
     });
 
     const fallbackVisualization = {
-      summary: `## Executive Summary: ${prompt}\n\nRetrieved ${allRows.length} verified records from **${connectedDbNames}** answering "${prompt}".\n\n### Strategic Business Insights:\n- **Verified Data:** Live data records retrieved directly from [${connectedDbNames}].\n- **Auto-Visualization:** Formatted dynamically for chart analysis, table inspection, and multi-format exports.\n- **Actionable Takeaways:** Cross-reference trends or pin this visual to your custom workspace dashboard.`,
+      summary: enableWebSearch
+        ? `## Executive Market & Competitor Intelligence: ${prompt}\n\nRetrieved **${webSources.length} verified web sources**${connections.length > 0 && needDbQuery ? ` and internal data records from **${connectedDbNames}**` : ""} addressing "${prompt}".\n\n### Strategic Business Insights:\n- **Market Landscape:** Synthesized external market intelligence from verified sources across ${webSources.map(s => s.domain).filter(Boolean).slice(0, 3).join(", ") || "the web"}.\n- **Competitor Analysis:** Evaluates market dynamics, competitive positioning, and strategic benchmarks for executive decision-making.\n- **Operational Guidance:** Cross-reference external findings with internal strategies to optimize pricing, expansion, and commercial competitiveness.`
+        : `## Executive Summary: ${prompt}\n\nRetrieved ${allRows.length} verified records from **${connectedDbNames}** answering "${prompt}".\n\n### Strategic Business Insights:\n- **Verified Data:** Live data records retrieved directly from [${connectedDbNames}].\n- **Auto-Visualization:** Formatted dynamically for chart analysis, table inspection, and multi-format exports.\n- **Actionable Takeaways:** Cross-reference trends or pin this visual to your custom workspace dashboard.`,
       recommendedVisualization: numericKeys.length > 0 ? "BAR" : "TABLE",
       chartConfig: {
         xAxisKey: primaryXKey,
-        dataKeys: numericKeys.slice(0, 2),
-        title: prompt.slice(0, 45) || "Analytics Overview",
+        dataKeys: numericKeys.length > 0 ? numericKeys.slice(0, 2) : ["Source_Index"],
+        title: prompt.slice(0, 45) || (enableWebSearch ? "Competitor & Market Intelligence" : "Analytics Overview"),
       },
       data: allRows,
+      webSources: webSources.length > 0 ? webSources : undefined,
+      isWebSearch: enableWebSearch,
       rawQuery: primaryRawQuery,
       connectionId: primaryConnectionId,
     };
 
     if (modelInfo.isConfigured && modelInfo.model) {
       const synthStartTime = Date.now();
-      console.log(`[DataBridge AI Debug] 📊 Step 3: Launching executive AI synthesis stream via ${modelInfo.providerName} (${modelInfo.modelName})...`);
+      console.log(`[DataBridge AI Debug] 📊 Step 4: Launching executive AI synthesis stream via ${modelInfo.providerName} (${modelInfo.modelName})...`);
 
       const encoder = new TextEncoder();
       const resilientStream = new ReadableStream({
@@ -1173,25 +1265,37 @@ export async function POST(req: Request) {
               system: `${MASTER_ANALYST_SYSTEM_PROMPT}
 
 EXECUTIVE BUSINESS INTELLIGENCE & AUTO-VISUALIZATION MANDATE:
-You are an executive data analyst preparing business insights from target database(s): [${connectedDbNames}].
+You are an executive data analyst preparing business insights ${connections.length > 0 && needDbQuery ? `from target database(s): [${connectedDbNames}]` : ""}${enableWebSearch ? ` and live verified web intelligence.` : "."}
+
+${enableWebSearch ? `
+WEB SEARCH & COMPETITOR ANALYSIS MANDATE:
+- Synthesize real-time competitor strategies, market share, product offerings, pricing dynamics, and industry benchmarks from the provided live web sources.
+- If internal database records are also provided, perform a rigorous comparative analysis (e.g. internal company revenue vs competitor scale, local pricing vs national benchmarks).
+- If no internal database query was required, focus completely on delivering high-impact competitor research, market trends, and SWOT insights.
+- You MUST populate "webSources" in your output JSON with the verified sources provided.
+` : ""}
 
 MANDATORY RESPONSE FORMAT (STRICT JSON SCHEMA):
 You MUST formulate your response as a valid, well-formed JSON object matching this exact schema:
 {
-  "summary": "Executive summary markdown string answering the user's question, with 2-3 strategic takeaways under '### Strategic Business Insights'.",
+  "summary": "Executive summary markdown string answering the user's question, citing external web sources and/or internal databases, with 2-3 strategic takeaways under '### Strategic Business Insights'.",
   "recommendedVisualization": "BAR" | "LINE" | "AREA" | "PIE" | "TABLE",
   "chartConfig": {
-    "xAxisKey": "string (the primary categorical, entity, or date column from data)",
+    "xAxisKey": "string (the primary categorical, entity, competitor, or date column from data)",
     "dataKeys": ["string (one or more numeric metric column names to plot)"],
     "title": "string (concise descriptive chart title)"
   },
   "data": [
-    /* Array of clean data objects from the verified records. Ensure numbers are numbers and keys match chartConfig */
-  ]
+    /* Array of clean data objects. For competitor analysis, include competitors/entities and their metrics (e.g. MarketShare, Stations, PricingEstimate) or clean tabular comparison rows */
+  ],
+  "webSources": [
+    /* Array of web sources matching { "title": string, "url": string, "snippet": string, "domain": string } */
+  ],
+  "isWebSearch": boolean
 }
 
 VISUALIZATION RULES:
-- Use "BAR" for category comparisons (customers, products, departments, status).
+- Use "BAR" for category comparisons (competitors, customers, products, departments, status).
 - Use "LINE" for chronological trends over time, dates, or months.
 - Use "AREA" for volume or cumulative growth over time.
 - Use "PIE" for proportion breakdowns or percentage share (up to 7 categories).
@@ -1203,13 +1307,17 @@ VISUALIZATION RULES:
                   role: "user",
                   content: prompt,
                 },
-                {
-                  role: "assistant",
+                ...(needDbQuery && executionContextForAI.length > 0 ? [{
+                  role: "assistant" as const,
                   content: `Verified Database Records for Selected Database(s) (${connectedDbNames}):\n${JSON.stringify(executionContextForAI, null, 2)}`,
-                },
+                }] : []),
+                ...(enableWebSearch && webSources.length > 0 ? [{
+                  role: "assistant" as const,
+                  content: `Live Web Intelligence (${webSources.length} sources retrieved from ${webProvider}):\n${webSources.map((s, i) => `[Source ${i + 1}] Title: ${s.title}\nDomain: ${s.domain || ""}\nURL: ${s.url}\nSnippet: ${s.snippet}`).join("\n\n")}`,
+                }] : []),
                 {
                   role: "user",
-                  content: `Please answer the question: "${prompt}". Return ONLY the strict JSON object with "summary", "recommendedVisualization", "chartConfig", and "data" based on verified records from [${connectedDbNames}].`,
+                  content: `Please answer the question: "${prompt}". Return ONLY the strict JSON object with "summary", "recommendedVisualization", "chartConfig", "data", and "webSources" based on the provided data.`,
                 },
               ],
               onFinish({ text }) {
@@ -1254,13 +1362,13 @@ VISUALIZATION RULES:
           "Transfer-Encoding": "chunked",
           "X-Connection-Id": primaryConnectionId,
           "X-Raw-Query": encodeURIComponent(primaryRawQuery),
+          "X-Web-Search": enableWebSearch ? "true" : "false",
+          "X-DB-Queried": (needDbQuery && connections.length > 0) ? "true" : "false",
         },
       });
     }
 
-    // ----------------------------------------------------------------
-    // STEP 4: Autonomous Simulation Fallback (When no LLM configured)
-    // ----------------------------------------------------------------
+    // 5. Autonomous Simulation Fallback (When no LLM configured)
     const jsonString = JSON.stringify(fallbackVisualization, null, 2);
     const encoder = new TextEncoder();
     const customStream = new ReadableStream({
@@ -1280,6 +1388,8 @@ VISUALIZATION RULES:
         "Transfer-Encoding": "chunked",
         "X-Connection-Id": primaryConnectionId,
         "X-Raw-Query": encodeURIComponent(primaryRawQuery),
+        "X-Web-Search": enableWebSearch ? "true" : "false",
+        "X-DB-Queried": (needDbQuery && connections.length > 0) ? "true" : "false",
       },
     });
   } catch (error) {

@@ -857,7 +857,7 @@ export async function getOrgContextAndConnections() {
       role: membership.role,
       orgId: membership.orgId,
       orgName: membership.organization.name,
-      inviteCode: membership.organization.inviteCode || "",
+      inviteCode: (membership.organization as any).inviteCode || "",
       connections: connections.map((c) => ({
         id: c.id,
         name: c.name,

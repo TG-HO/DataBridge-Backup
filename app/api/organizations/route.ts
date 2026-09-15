@@ -35,7 +35,7 @@ export async function GET() {
       organization: {
         id: membership.organization.id,
         name: membership.organization.name,
-        inviteCode: membership.organization.inviteCode,
+        inviteCode: (membership.organization as any).inviteCode,
         role: membership.role,
         _count: membership.organization._count,
       },

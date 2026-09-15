@@ -2,6 +2,13 @@
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 
+export interface WebSource {
+  title: string;
+  snippet: string;
+  url: string;
+  domain?: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
@@ -12,6 +19,8 @@ export interface ChatMessage {
   rawQuery?: string;
   isError?: boolean;
   errorMessage?: string;
+  isWebSearch?: boolean;
+  webSources?: WebSource[];
 }
 
 export interface QuerySession {
@@ -41,7 +50,7 @@ const DEFAULT_WELCOME_MESSAGE: ChatMessage = {
   id: "welcome-message",
   role: "assistant",
   content:
-    "## Executive Database Assistant Ready\n\nAsk any business or operational question in natural language. You can query a single database or select multiple databases simultaneously to synthesize cross-system intelligence.\n\n### Suggested Queries:\n- *\"List our top 10 customers by order volume with their status.\"*\n- *\"Show customer breakdown across retail and enterprise databases.\"*\n- *\"Summarize overall transaction performance and key metrics.\"*",
+    "## Executive Intelligence Assistant Ready\n\nAsk any business question in natural language. You can query internal enterprise databases, activate **Live Web Search** for competitor analysis and industry benchmarks, or synthesize both simultaneously.\n\n### Suggested Queries:\n- *\"Competitor analysis: Top retail fuel operators and market positioning.\"*\n- *\"List our top 10 customers by order volume with their status.\"*\n- *\"Compare internal sales performance against current petroleum market trends.\"*",
   timestamp: "Active",
 };
 

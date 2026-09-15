@@ -56,7 +56,7 @@ export async function POST(req: Request) {
       const targetOrg = await prisma.organization.findFirst({
         where: {
           OR: [
-            { inviteCode: targetCode },
+            { inviteCode: targetCode } as any,
             { id: orgCode || existingOrgId },
           ],
         },
@@ -102,7 +102,7 @@ export async function POST(req: Request) {
           organization: {
             id: result.organization.id,
             name: result.organization.name,
-            inviteCode: result.organization.inviteCode,
+            inviteCode: (result.organization as any).inviteCode,
             role: result.membership.role,
           },
         },
@@ -127,7 +127,7 @@ export async function POST(req: Request) {
         data: {
           name: orgName,
           inviteCode: newInviteCode,
-        },
+        } as any,
       });
 
       const membership = await tx.organizationUser.create({
@@ -153,7 +153,7 @@ export async function POST(req: Request) {
         organization: {
           id: result.organization.id,
           name: result.organization.name,
-          inviteCode: result.organization.inviteCode,
+          inviteCode: (result.organization as any).inviteCode,
           role: result.membership.role,
         },
       },

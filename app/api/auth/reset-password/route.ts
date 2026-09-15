@@ -42,7 +42,7 @@ export async function POST(req: Request) {
     const org = await prisma.organization.findFirst({
       where: {
         OR: [
-          { inviteCode: cleanOrgCode },
+          { inviteCode: cleanOrgCode } as any,
           { id: cleanOrgCode },
         ],
       },

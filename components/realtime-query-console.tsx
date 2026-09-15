@@ -25,10 +25,13 @@ import {
   Receipt,
   GitCompare,
   Paperclip,
+  Globe,
+  ExternalLink,
+  Search,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useQuerySessions, ChatMessage } from "@/lib/query-session-context";
+import { useQuerySessions, ChatMessage, WebSource } from "@/lib/query-session-context";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -40,6 +43,8 @@ interface ParsedVisualization {
   recommendedVisualization: ChartType;
   chartConfig?: ChartConfig;
   data: Record<string, unknown>[];
+  webSources?: WebSource[];
+  isWebSearch?: boolean;
 }
 
 function parseVisualizationPayload(content: string): ParsedVisualization | null {
@@ -164,6 +169,7 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
   const [hoveredMsgId, setHoveredMsgId] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
+  const [enableWebSearch, setEnableWebSearch] = useState(false);
   const [activeAssistantId, setActiveAssistantId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -255,7 +261,7 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
 
   const handleSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!prompt.trim() || selectedConnIds.length === 0 || loading) return;
+    if (!prompt.trim() || (!enableWebSearch && selectedConnIds.length === 0) || loading) return;
 
     const currentPrompt = prompt.trim();
     setPrompt("");
@@ -281,12 +287,14 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
         content: currentPrompt,
         timestamp,
         targetedDatabases: targetedDbs,
+        isWebSearch: enableWebSearch,
       },
       {
         id: assistantMsgId,
         role: "assistant",
         content: "",
         timestamp,
+        isWebSearch: enableWebSearch,
       },
     ]);
 
@@ -310,7 +318,8 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
       "%c[DataBridge AI Console]%c Submitting query to /api/chat:",
       "background: #4f46e5; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;",
       "color: inherit;",
-      currentPrompt
+      currentPrompt,
+      `[WebSearch: ${enableWebSearch}]`
     );
 
     try {
@@ -321,6 +330,7 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
           prompt: currentPrompt,
           connectionIds: selectedConnIds,
           chatHistory: historyPayload,
+          enableWebSearch,
         }),
         signal: abortController.signal,
       });
@@ -340,6 +350,7 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
       const rawQueryHeader = res.headers.get("X-Raw-Query")
         ? decodeURIComponent(res.headers.get("X-Raw-Query")!)
         : "";
+      const isWebSearchHeader = res.headers.get("X-Web-Search") === "true";
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -366,6 +377,7 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
                   content: accumulated,
                   connectionId: connectionIdHeader,
                   rawQuery: rawQueryHeader,
+                  isWebSearch: enableWebSearch || isWebSearchHeader,
                   isError: false,
                 }
                 : msg
@@ -379,6 +391,22 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
       if (!accumulated.trim()) {
         throw new Error(
           "The database engine executed the query, but the synthesis service returned an empty response. This can happen if the AI model is temporarily rate-limited. Please retry."
+        );
+      }
+
+      // Check for structured web sources in completed stream
+      const finalParsed = parseVisualizationPayload(accumulated);
+      if (finalParsed?.webSources && finalParsed.webSources.length > 0) {
+        updateActiveSessionMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === assistantMsgId
+              ? {
+                ...msg,
+                webSources: finalParsed.webSources,
+                isWebSearch: true,
+              }
+              : msg
+          )
         );
       }
 
@@ -592,6 +620,22 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
               {/* Enterprise Quick Action Chips */}
               <div className="flex items-center justify-center flex-wrap gap-2.5 max-w-2xl mt-8">
                 <QuickActionChip
+                  icon={<Globe className="w-3.5 h-3.5 text-[#00E599]" />}
+                  label="Competitor Analysis: Fuel Retail"
+                  onClick={() => {
+                    setEnableWebSearch(true);
+                    handleQuickPrompt("Competitor analysis of top retail fuel operators and market share positioning.");
+                  }}
+                />
+                <QuickActionChip
+                  icon={<Search className="w-3.5 h-3.5 text-[#0EA5E9]" />}
+                  label="Market Price Benchmarks"
+                  onClick={() => {
+                    setEnableWebSearch(true);
+                    handleQuickPrompt("Analyze current oil and fuel market trends compared to industry competitors.");
+                  }}
+                />
+                <QuickActionChip
                   icon={<Users className="w-3.5 h-3.5 text-[#00E599]" />}
                   label="Top 10 Customers"
                   onClick={() => handleQuickPrompt("List our top 10 customers by order volume with their status.")}
@@ -717,10 +761,28 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
                           }
 
                           const parsedViz = parseVisualizationPayload(sanitizedContent);
+                          const webSources = parsedViz?.webSources || msg.webSources || [];
+                          const isWebQuery = Boolean(msg.isWebSearch || parsedViz?.isWebSearch || webSources.length > 0);
 
                           if (parsedViz) {
                             return (
                               <div className="space-y-4">
+                                {/* Source Badges */}
+                                <div className="flex flex-wrap items-center gap-2">
+                                  {isWebQuery && (
+                                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-[6px] bg-[#00E599]/15 border border-[#00E599]/35 text-[#00E599] text-[11px] font-mono font-semibold shadow-sm">
+                                      <Globe className="w-3 h-3 text-[#00E599] animate-pulse" />
+                                      <span>Live Web Intelligence</span>
+                                    </span>
+                                  )}
+                                  {msg.connectionId && (
+                                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-[6px] bg-[#0EA5E9]/15 border border-[#0EA5E9]/35 text-[#0EA5E9] text-[11px] font-mono font-semibold shadow-sm">
+                                      <Database className="w-3 h-3 text-[#0EA5E9]" />
+                                      <span>Internal Database</span>
+                                    </span>
+                                  )}
+                                </div>
+
                                 {/* Executive Summary Markdown */}
                                 <div className="p-5 sm:p-6 rounded-[10px] bg-[#121215] border border-white/[0.08] shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)] text-[#FAFAFA] text-xs leading-relaxed backdrop-blur-xl">
                                   <ReactMarkdown
@@ -771,6 +833,45 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
                                   >
                                     {parsedViz.summary}
                                   </ReactMarkdown>
+
+                                  {/* Verified Web Sources & Citations Grid */}
+                                  {webSources.length > 0 && (
+                                    <div className="mt-5 pt-4 border-t border-white/[0.08] space-y-2.5">
+                                      <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-1.5 text-xs font-bold text-[#FAFAFA]">
+                                          <Globe className="w-3.5 h-3.5 text-[#00E599]" />
+                                          <span>Verified Web Sources & Citations ({webSources.length})</span>
+                                        </div>
+                                        <span className="text-[10px] text-[#A1A1AA] font-mono">Live Intelligence</span>
+                                      </div>
+                                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                        {webSources.map((src, i) => (
+                                          <a
+                                            key={i}
+                                            href={src.url}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="group flex flex-col p-2.5 rounded-[6px] bg-[#18181B] hover:bg-[#222226] border border-white/[0.06] hover:border-[#00E599]/40 transition-all text-left"
+                                          >
+                                            <div className="flex items-center justify-between gap-1 mb-1">
+                                              <span className="text-[10px] font-mono text-[#00E599] uppercase tracking-wider truncate max-w-[140px]">
+                                                {src.domain || "Web Source"}
+                                              </span>
+                                              <ExternalLink className="w-3 h-3 text-[#A1A1AA] group-hover:text-[#00E599] transition-colors shrink-0" />
+                                            </div>
+                                            <span className="text-xs font-medium text-[#FAFAFA] group-hover:text-[#00E599] transition-colors line-clamp-1">
+                                              {src.title}
+                                            </span>
+                                            {src.snippet && (
+                                              <p className="text-[11px] text-[#A1A1AA] mt-1 line-clamp-2 leading-relaxed">
+                                                {src.snippet}
+                                              </p>
+                                            )}
+                                          </a>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
 
                                 {/* Dynamic Auto-Visualization (FR-11, FR-12, FR-13) */}
@@ -1096,7 +1197,12 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
 
       {/* Floating Modern Fintech Input Box Section */}
       <div className="relative z-20 w-full max-w-4xl mx-auto px-4 pb-4 sm:pb-6">
-        <div className="relative bg-[#121215] rounded-[10px] border border-white/[0.08] shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)] transition-all focus-within:border-[#00E599]/50 focus-within:ring-1 focus-within:ring-[#00E599]/30">
+        <div className={cn(
+          "relative bg-[#121215] rounded-[10px] border shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)] transition-all",
+          enableWebSearch
+            ? "border-[#00E599]/40 shadow-[0_0_24px_-4px_rgba(0,229,153,0.15)] focus-within:border-[#00E599] focus-within:ring-1 focus-within:ring-[#00E599]/40"
+            : "border-white/[0.08] focus-within:border-[#00E599]/50 focus-within:ring-1 focus-within:ring-[#00E599]/30"
+        )}>
           <Textarea
             ref={textareaRef}
             value={prompt}
@@ -1104,10 +1210,14 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
               setPrompt(e.target.value);
               adjustHeight();
             }}
-            placeholder={`Ask anything across ${selectedConnIds.length === 1
-              ? selectedConnectionNames[0] || "database"
-              : `${selectedConnIds.length} connected databases`
-              }... (e.g. "Who are our top customers?" or "Compare sales by region")`}
+            placeholder={
+              enableWebSearch
+                ? "Search the web for competitor analysis, market benchmarks, pricing trends, or compare with internal data..."
+                : `Ask anything across ${selectedConnIds.length === 1
+                  ? selectedConnectionNames[0] || "database"
+                  : `${selectedConnIds.length} connected databases`
+                  }... (e.g. "Who are our top customers?" or "Compare sales by region")`
+            }
             className={cn(
               "w-full px-4 py-3 resize-none border-none",
               "bg-transparent text-[#FAFAFA] text-xs sm:text-sm",
@@ -1140,14 +1250,38 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
               <span className="text-[11px] font-mono text-[#A1A1AA] flex items-center gap-1.5">
                 <Layers className="w-3 h-3 text-[#00E599]" />
                 <span className="hidden sm:inline">Targeting:</span>{" "}
-                <span className="text-[#FAFAFA] font-medium truncate max-w-[180px]">
-                  {selectedConnIds.length === connections.length
-                    ? `All (${connections.length})`
-                    : selectedConnIds.length === 1
-                      ? selectedConnectionNames[0]
-                      : `${selectedConnIds.length} DBs`}
+                <span className="text-[#FAFAFA] font-medium truncate max-w-[160px]">
+                  {selectedConnIds.length === 0 && enableWebSearch
+                    ? "Web Only (No DB)"
+                    : selectedConnIds.length === connections.length
+                      ? `All (${connections.length})`
+                      : selectedConnIds.length === 1
+                        ? selectedConnectionNames[0]
+                        : `${selectedConnIds.length} DBs`}
                 </span>
               </span>
+
+              {/* Web Search Toggle Button */}
+              <button
+                type="button"
+                onClick={() => setEnableWebSearch(!enableWebSearch)}
+                className={cn(
+                  "flex items-center gap-1.5 px-2.5 py-1 rounded-[6px] text-xs font-mono font-medium transition-all cursor-pointer border ml-1",
+                  enableWebSearch
+                    ? "bg-[#00E599]/15 border-[#00E599]/50 text-[#00E599] shadow-[0_0_12px_rgba(0,229,153,0.25)]"
+                    : "bg-white/[0.03] border-white/[0.08] hover:border-white/[0.15] text-[#A1A1AA] hover:text-[#FAFAFA]"
+                )}
+                title="Toggle Web Search for competitor analysis, live market rates, and industry benchmarks"
+              >
+                <Globe className={cn("w-3.5 h-3.5", enableWebSearch && "animate-pulse text-[#00E599]")} />
+                <span className="hidden sm:inline">Web Search</span>
+                <span className={cn(
+                  "text-[9px] px-1 py-0.2 rounded font-bold uppercase",
+                  enableWebSearch ? "bg-[#00E599]/25 text-[#00E599]" : "bg-white/[0.08] text-[#A1A1AA]"
+                )}>
+                  {enableWebSearch ? "ON" : "OFF"}
+                </span>
+              </button>
             </div>
 
             <div className="flex items-center gap-2">
@@ -1158,10 +1292,10 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
               <Button
                 type="button"
                 onClick={() => handleSubmit()}
-                disabled={loading || !prompt.trim() || selectedConnIds.length === 0}
+                disabled={loading || !prompt.trim() || (!enableWebSearch && selectedConnIds.length === 0)}
                 className={cn(
                   "flex items-center gap-1 px-3 py-2 rounded-[6px] transition-all h-8",
-                  loading || !prompt.trim() || selectedConnIds.length === 0
+                  loading || !prompt.trim() || (!enableWebSearch && selectedConnIds.length === 0)
                     ? "bg-[#18181B] text-[#A1A1AA]/40 cursor-not-allowed border border-white/[0.08]"
                     : "bg-[#00E599] hover:bg-[#00E599]/90 text-[#09090B] font-semibold shadow-sm cursor-pointer"
                 )}
