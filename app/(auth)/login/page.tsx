@@ -2,9 +2,10 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
-import { Sparkles, Lock, Mail, ArrowRight, AlertCircle, CheckCircle2 } from "lucide-react";
+import { Lock, Mail, ArrowRight, AlertCircle, CheckCircle2 } from "lucide-react";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -20,13 +21,13 @@ export default function LoginPage() {
 
     try {
       const res = await signIn("credentials", {
+        redirect: false,
         email,
         password,
-        redirect: false,
       });
 
       if (res?.error) {
-        setError("Invalid email or password. Please try again.");
+        setError("Invalid email address or password.");
         setLoading(false);
       } else {
         router.push("/");
@@ -42,14 +43,19 @@ export default function LoginPage() {
     <div className="min-h-screen w-full flex items-center justify-center p-4 bg-[#09090B] text-[#FAFAFA] relative overflow-hidden">
       <div className="w-full max-w-md z-10">
         {/* Header Branding */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-12 h-12 rounded-[6px] bg-gradient-to-tr from-[#00E599] to-[#10B981] text-[#09090B] shadow-sm mb-4">
-            <Sparkles className="w-6 h-6" />
+        <div className="text-center mb-6">
+          <div className="flex items-center justify-center mb-3">
+            <Image
+              src="/db-logo-and-text-light.png"
+              alt="DataBridge AI"
+              width={260}
+              height={46}
+              className="h-11 w-auto object-contain"
+              priority
+              unoptimized
+            />
           </div>
-          <h1 className="text-2xl font-bold tracking-tight text-[#FAFAFA]">
-            Welcome to DataBridge <span className="text-[#00E599]">AI</span>
-          </h1>
-          <p className="text-xs text-[#A1A1AA] mt-1.5 font-mono">
+          <p className="text-xs text-[#A1A1AA] font-mono">
             Sign in to access your multi-tenant analytics dashboard
           </p>
         </div>

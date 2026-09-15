@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import {
   MessageSquare,
   ChevronLeft,
@@ -57,22 +58,28 @@ export default function Sidebar({ user }: SidebarProps) {
       {/* Top Header & Brand */}
       <div className="flex items-center justify-between h-16 px-4 border-b border-white/[0.08]">
         {!isCollapsed ? (
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-[6px] bg-gradient-to-tr from-[#00E599] to-[#10B981] flex items-center justify-center shadow-sm">
-              <Sparkles className="w-4 h-4 text-[#09090B]" />
-            </div>
-            <div className="flex flex-col">
-              <span className="font-bold text-sm text-[#FAFAFA] tracking-tight">
-                DataBridge <span className="text-[#00E599]">AI</span>
-              </span>
-              <span className="text-[10px] text-[#A1A1AA] font-mono">
-                MSSQL RAG Engine
-              </span>
-            </div>
+          <div className="flex items-center min-w-0 py-1">
+            <Image
+              src="/db-logo-and-text-light.png"
+              alt="DataBridge AI"
+              width={180}
+              height={36}
+              className="h-9 w-auto object-contain max-w-[190px]"
+              priority
+              unoptimized
+            />
           </div>
         ) : (
-          <div className="w-8 h-8 mx-auto rounded-[6px] bg-gradient-to-tr from-[#00E599] to-[#10B981] flex items-center justify-center shadow-sm">
-            <Sparkles className="w-4 h-4 text-[#09090B]" />
+          <div className="flex items-center justify-center w-full">
+            <Image
+              src="/db-logo-only-light.png"
+              alt="DataBridge AI"
+              width={32}
+              height={32}
+              className="h-7 w-auto object-contain"
+              priority
+              unoptimized
+            />
           </div>
         )}
 

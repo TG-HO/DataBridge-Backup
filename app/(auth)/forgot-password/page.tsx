@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import {
   Sparkles,
@@ -76,12 +77,17 @@ export default function ForgotPasswordPage() {
       <div className="w-full max-w-md z-10">
         {/* Branding */}
         <div className="text-center mb-6">
-          <div className="inline-flex items-center justify-center w-11 h-11 rounded-[10px] bg-[#18181B] border border-[rgba(255,255,255,0.08)] text-[#00E599] shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)] mb-3">
-            <Sparkles className="w-5 h-5 text-[#00E599]" />
+          <div className="flex items-center justify-center mb-3">
+            <Image
+              src="/db-logo-and-text-light.png"
+              alt="DataBridge AI"
+              width={260}
+              height={46}
+              className="h-11 w-auto object-contain"
+              priority
+              unoptimized
+            />
           </div>
-          <h1 className="text-2xl font-semibold tracking-tight text-[#FAFAFA]">
-            Reset Account Password
-          </h1>
           <p className="text-xs text-[#A1A1AA] mt-1">
             Verify your workspace membership and establish a new credential
           </p>

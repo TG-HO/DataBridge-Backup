@@ -12,7 +12,8 @@ export function middleware(req: NextRequest) {
     pathname.startsWith("/icons") ||
     pathname === "/sw.js" ||
     pathname.startsWith("/_next") ||
-    pathname === "/favicon.ico"
+    pathname === "/favicon.ico" ||
+    /\.(png|jpg|jpeg|svg|ico|webp|gif|woff2?|ttf|eot)$/i.test(pathname)
   ) {
     return NextResponse.next();
   }
@@ -54,6 +55,6 @@ export const config = {
     /*
      * Match all request paths except static files and images
      */
-    "/((?!_next/static|_next/image|favicon.ico).*)",
+    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
   ],
 };

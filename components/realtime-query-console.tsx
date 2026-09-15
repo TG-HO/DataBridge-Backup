@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import Image from "next/image";
 import {
   Database,
   Trash2,
@@ -570,8 +571,16 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
           {/* Centered Hero Display when No User Messages */}
           {!hasUserQueries && (
             <div className="flex flex-col items-center justify-center min-h-[50vh] text-center px-4">
-              <div className="w-14 h-14 rounded-[10px] bg-gradient-to-tr from-[#00E599] to-[#10B981] flex items-center justify-center text-[#09090B] shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)] mb-5 animate-in zoom-in-90 duration-300">
-                <Sparkles className="w-7 h-7 animate-pulse" />
+              <div className="flex items-center justify-center mb-4 animate-in zoom-in-90 duration-300">
+                <Image
+                  src="/db-logo-only-light.png"
+                  alt="DataBridge AI"
+                  width={72}
+                  height={72}
+                  className="h-16 w-auto object-contain drop-shadow-[0_8px_24px_rgba(0,229,153,0.35)]"
+                  priority
+                  unoptimized
+                />
               </div>
               <h1 className="text-3xl sm:text-5xl font-extrabold text-[#FAFAFA] tracking-tight">
                 DataBridge <span className="text-[#00E599]">AI</span>
