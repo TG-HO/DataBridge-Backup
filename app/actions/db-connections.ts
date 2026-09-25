@@ -84,20 +84,21 @@ function formatNoSqlCollectionsToMarkdown(
  * or when target instance is in an isolated sandbox.
  */
 function getFallbackSchemaContext(dbName: string, engine: string = "dbo"): string {
-  if (engine === "mongodb" || engine === "firebase") {
-    return `## Database Schema Context: [${dbName}] (${engine.toUpperCase()})
+  const safeEngine = /^[a-zA-Z0-9_]+$/.test(engine) ? engine : "dbo";
+  if (safeEngine === "mongodb" || safeEngine === "firebase") {
+    return `## Database Schema Context: [${dbName}] (${safeEngine.toUpperCase()})
 - **analytics_events** (_id: string, event_name: string, user_id: string, properties: object, timestamp: date)
 - **user_profiles** (_id: string, email: string, tier: string, org_id: string, status: string, created_at: date)
 - **transactions** (_id: string, customer_id: string, amount: number, currency: string, status: string, timestamp: date)
 - **app_telemetry** (_id: string, model: string, latency_ms: number, tokens: number, status: string)`.trim();
   }
 
-  return `## Database Schema Context: [${dbName}] (${engine.toUpperCase()})
-- **${engine}.FactInferenceTelemetry** (TraceId nvarchar(64), ModelName nvarchar(50), Pipeline nvarchar(50), LatencyMs int, PromptTokens int, CompletionTokens int, Status nvarchar(20), Timestamp datetime2)
-- **${engine}.DimOrganizations** (OrgId nvarchar(50), OrgName nvarchar(100), Tier nvarchar(20), CreatedAt datetime2)
-- **${engine}.DimModels** (ModelId nvarchar(50), ModelName nvarchar(50), Provider nvarchar(50), MaxTokens int, CostPer1kTokens decimal(10,4))
-- **${engine}.FactAnomalies** (AnomalyId bigint, TraceId nvarchar(64), Severity nvarchar(20), MitigationAction nvarchar(100), ResolvedAt datetime2)
-- **${engine}.DimVectorStores** (VectorStoreId nvarchar(50), IndexName nvarchar(100), DocumentCount bigint, Dimension int, LastIndexed datetime2)`
+  return `## Database Schema Context: [${dbName}] (${safeEngine.toUpperCase()})
+- **${safeEngine}.FactInferenceTelemetry** (TraceId nvarchar(64), ModelName nvarchar(50), Pipeline nvarchar(50), LatencyMs int, PromptTokens int, CompletionTokens int, Status nvarchar(20), Timestamp datetime2)
+- **${safeEngine}.DimOrganizations** (OrgId nvarchar(50), OrgName nvarchar(100), Tier nvarchar(20), CreatedAt datetime2)
+- **${safeEngine}.DimModels** (ModelId nvarchar(50), ModelName nvarchar(50), Provider nvarchar(50), MaxTokens int, CostPer1kTokens decimal(10,4))
+- **${safeEngine}.FactAnomalies** (AnomalyId bigint, TraceId nvarchar(64), Severity nvarchar(20), MitigationAction nvarchar(100), ResolvedAt datetime2)
+- **${safeEngine}.DimVectorStores** (VectorStoreId nvarchar(50), IndexName nvarchar(100), DocumentCount bigint, Dimension int, LastIndexed datetime2)`
     .trim();
 }
 
@@ -295,16 +296,19 @@ export async function syncDatabaseSchema(
           markdownSchema = formatSchemaToMarkdown(columnRows, conn.dbName);
           const uniqueTables = new Set(columnRows.map((r) => `${r.tableSchema}.${r.tableName}`));
           tableCount = uniqueTables.size;
+          isFallback = false;
         } else {
-          markdownSchema = getFallbackSchemaContext(conn.dbName, "mysql");
-          tableCount = 5;
-          isFallback = true;
+          markdownSchema = `## Database Schema Context: [${conn.dbName}] (MYSQL)\n*(No user tables or views detected in this database)*`;
+          tableCount = 0;
+          isFallback = false;
         }
       } catch (dbError) {
-        console.warn(`[syncDatabaseSchema] MySQL extraction notice:`, dbError);
-        markdownSchema = getFallbackSchemaContext(conn.dbName, "mysql");
-        tableCount = 5;
-        isFallback = true;
+        const errorMsg = dbError instanceof Error ? dbError.message : String(dbError);
+        console.error(`[syncDatabaseSchema] MySQL extraction error for ${conn.name}:`, errorMsg);
+        return {
+          success: false,
+          error: `MySQL schema extraction failed: ${errorMsg}`,
+        };
       } finally {
         if (mysqlConn) {
           try { await mysqlConn.end(); } catch {}
@@ -430,13 +434,13 @@ export async function syncDatabaseSchema(
           uri = `mongodb://${authPart}${conn.host}${portPart}/${conn.dbName}`;
         }
 
-        mongoClient = new MongoClient(uri, { serverSelectionTimeoutMS: 6000 });
+        mongoClient = new MongoClient(uri, { serverSelectionTimeoutMS: 8000 });
         await mongoClient.connect();
         const db = mongoClient.db(conn.dbName);
         const collections = await db.listCollections().toArray();
 
         const discovered: { name: string; fields: Record<string, string> }[] = [];
-        for (const collInfo of collections.slice(0, 20)) {
+        for (const collInfo of collections.slice(0, 50)) {
           const collName = collInfo.name;
           if (collName.startsWith("system.")) continue;
 
@@ -459,16 +463,19 @@ export async function syncDatabaseSchema(
         if (discovered.length > 0) {
           markdownSchema = formatNoSqlCollectionsToMarkdown(discovered, conn.dbName, "mongodb");
           tableCount = discovered.length;
+          isFallback = false;
         } else {
-          markdownSchema = getFallbackSchemaContext(conn.dbName, "mongodb");
-          tableCount = 4;
-          isFallback = true;
+          markdownSchema = `## Database Schema Context: [${conn.dbName}] (MONGODB)\n*(No collections detected in this database)*`;
+          tableCount = 0;
+          isFallback = false;
         }
       } catch (mError) {
-        console.warn(`[syncDatabaseSchema] MongoDB discovery notice:`, mError);
-        markdownSchema = getFallbackSchemaContext(conn.dbName, "mongodb");
-        tableCount = 4;
-        isFallback = true;
+        const errorMsg = mError instanceof Error ? mError.message : String(mError);
+        console.error(`[syncDatabaseSchema] MongoDB discovery error for ${conn.name}:`, errorMsg);
+        return {
+          success: false,
+          error: `MongoDB schema discovery failed: ${errorMsg}`,
+        };
       } finally {
         if (mongoClient) {
           try { await mongoClient.close(); } catch {}
@@ -495,7 +502,7 @@ export async function syncDatabaseSchema(
         const rootCollections = await firestore.listCollections();
 
         const discovered: { name: string; fields: Record<string, string> }[] = [];
-        for (const coll of rootCollections.slice(0, 15)) {
+        for (const coll of rootCollections.slice(0, 30)) {
           const snapshot = await coll.limit(5).get();
           const fields: Record<string, string> = {};
 
@@ -515,16 +522,19 @@ export async function syncDatabaseSchema(
         if (discovered.length > 0) {
           markdownSchema = formatNoSqlCollectionsToMarkdown(discovered, conn.dbName || conn.host, "firestore");
           tableCount = discovered.length;
+          isFallback = false;
         } else {
-          markdownSchema = getFallbackSchemaContext(conn.dbName || "firestore", "firebase");
-          tableCount = 4;
-          isFallback = true;
+          markdownSchema = `## Database Schema Context: [${conn.dbName || "firestore"}] (FIRESTORE)\n*(No collections detected in this database)*`;
+          tableCount = 0;
+          isFallback = false;
         }
       } catch (fbErr) {
-        console.warn(`[syncDatabaseSchema] Firebase discovery notice:`, fbErr);
-        markdownSchema = getFallbackSchemaContext(conn.dbName || "firestore", "firebase");
-        tableCount = 4;
-        isFallback = true;
+        const errorMsg = fbErr instanceof Error ? fbErr.message : String(fbErr);
+        console.error(`[syncDatabaseSchema] Firebase discovery error for ${conn.name}:`, errorMsg);
+        return {
+          success: false,
+          error: `Firebase Firestore schema discovery failed: ${errorMsg}`,
+        };
       }
     }
 
@@ -533,55 +543,125 @@ export async function syncDatabaseSchema(
     // -------------------------------------------------------------
     else {
       let pool: sql.ConnectionPool | null = null;
-      const mssqlConfig: sql.config = {
-        server: conn.host,
-        port: conn.port || 1433,
-        database: conn.dbName,
-        user: conn.username,
-        password: plainPassword,
-        options: {
-          encrypt: true,
-          trustServerCertificate: true,
-          readOnlyIntent: true,
-        },
-        connectionTimeout: 8000,
-        requestTimeout: 10000,
-        pool: { max: 1, min: 0, idleTimeoutMillis: 3000 },
-      };
-
       try {
-        pool = new sql.ConnectionPool(mssqlConfig);
-        await pool.connect();
+        let connected = false;
+        let lastError: Error | null = null;
 
-        const result = await pool.request().query<SchemaColumnRow>(`
-          SELECT 
-            t.TABLE_SCHEMA AS tableSchema,
-            t.TABLE_NAME AS tableName,
-            c.COLUMN_NAME AS columnName,
-            c.DATA_TYPE AS dataType,
-            c.CHARACTER_MAXIMUM_LENGTH AS maxLength,
-            c.IS_NULLABLE AS isNullable
-          FROM INFORMATION_SCHEMA.TABLES t
-          INNER JOIN INFORMATION_SCHEMA.COLUMNS c 
-            ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME
-          WHERE t.TABLE_TYPE = 'BASE TABLE'
-          ORDER BY t.TABLE_SCHEMA, t.TABLE_NAME, c.ORDINAL_POSITION
-        `);
+        const baseConfig: sql.config = {
+          server: conn.host,
+          port: Number(conn.port) || 1433,
+          database: conn.dbName,
+          user: conn.username,
+          password: plainPassword,
+          connectionTimeout: 12000,
+          requestTimeout: 35000,
+          pool: { max: 1, min: 0, idleTimeoutMillis: 3000 },
+        };
 
-        if (result.recordset && result.recordset.length > 0) {
-          markdownSchema = formatSchemaToMarkdown(result.recordset, conn.dbName);
-          const uniqueTables = new Set(result.recordset.map((r) => `${r.tableSchema}.${r.tableName}`));
+        // Try encrypted connection first
+        try {
+          pool = new sql.ConnectionPool({
+            ...baseConfig,
+            options: { encrypt: true, trustServerCertificate: true },
+          });
+          await pool.connect();
+          connected = true;
+        } catch (encErr) {
+          lastError = encErr instanceof Error ? encErr : new Error(String(encErr));
+          try { await pool?.close(); } catch {}
+          // Graceful fallback for unencrypted local developer instances
+          try {
+            pool = new sql.ConnectionPool({
+              ...baseConfig,
+              options: { encrypt: false, trustServerCertificate: true },
+            });
+            await pool.connect();
+            connected = true;
+          } catch (unencErr) {
+            lastError = unencErr instanceof Error ? unencErr : new Error(String(unencErr));
+          }
+        }
+
+        if (!connected || !pool) {
+          throw lastError || new Error("Could not establish connection to SQL Server instance.");
+        }
+
+        let columnRows: SchemaColumnRow[] = [];
+
+        // Strategy 1: High-speed native sys catalog query (sys.objects + sys.columns)
+        // Blazing fast (under 3s) for enterprise databases with 9,000+ tables (Dynamics AX, SAP, etc.)
+        try {
+          const sysResult = await pool.request().query<SchemaColumnRow>(`
+            SELECT 
+              s.name AS tableSchema,
+              o.name AS tableName,
+              c.name AS columnName,
+              ty.name AS dataType,
+              c.max_length AS maxLength,
+              CASE WHEN c.is_nullable = 1 THEN 'YES' ELSE 'NO' END AS isNullable
+            FROM sys.objects o
+            INNER JOIN sys.schemas s ON o.schema_id = s.schema_id
+            INNER JOIN sys.columns c ON o.object_id = c.object_id
+            INNER JOIN sys.types ty ON c.user_type_id = ty.user_type_id
+            WHERE o.type IN ('U', 'V')
+              AND o.is_ms_shipped = 0 
+              AND o.name != 'sysdiagrams'
+              AND s.name NOT IN ('sys', 'INFORMATION_SCHEMA')
+            ORDER BY s.name, o.name, c.column_id;
+          `);
+
+          if (sysResult.recordset && sysResult.recordset.length > 0) {
+            columnRows = sysResult.recordset;
+          }
+        } catch (sysErr) {
+          console.warn("[syncDatabaseSchema] sys.objects query notice, falling back to INFORMATION_SCHEMA:", sysErr);
+        }
+
+        // Strategy 2: INFORMATION_SCHEMA fallback (for restricted user permissions)
+        if (columnRows.length === 0) {
+          try {
+            const infoResult = await pool.request().query<SchemaColumnRow>(`
+              SELECT 
+                t.TABLE_SCHEMA AS tableSchema,
+                t.TABLE_NAME AS tableName,
+                c.COLUMN_NAME AS columnName,
+                c.DATA_TYPE AS dataType,
+                c.CHARACTER_MAXIMUM_LENGTH AS maxLength,
+                c.IS_NULLABLE AS isNullable
+              FROM INFORMATION_SCHEMA.TABLES t
+              INNER JOIN INFORMATION_SCHEMA.COLUMNS c 
+                ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME
+              WHERE t.TABLE_TYPE IN ('BASE TABLE', 'VIEW')
+                AND t.TABLE_SCHEMA NOT IN ('sys', 'INFORMATION_SCHEMA')
+                AND t.TABLE_NAME NOT IN ('sysdiagrams')
+              ORDER BY t.TABLE_SCHEMA, t.TABLE_NAME, c.ORDINAL_POSITION;
+            `);
+
+            if (infoResult.recordset && infoResult.recordset.length > 0) {
+              columnRows = infoResult.recordset;
+            }
+          } catch (infoErr) {
+            console.warn("[syncDatabaseSchema] INFORMATION_SCHEMA query error:", infoErr);
+          }
+        }
+
+        if (columnRows.length > 0) {
+          markdownSchema = formatSchemaToMarkdown(columnRows, conn.dbName);
+          const uniqueTables = new Set(columnRows.map((r) => `${r.tableSchema}.${r.tableName}`));
           tableCount = uniqueTables.size;
+          isFallback = false;
         } else {
-          markdownSchema = getFallbackSchemaContext(conn.dbName, conn.schemaContext || "dbo");
-          tableCount = 5;
-          isFallback = true;
+          markdownSchema = `## Database Schema Context: [${conn.dbName}] (MSSQL)\n*(No user tables or views detected in this database)*`;
+          tableCount = 0;
+          isFallback = false;
         }
       } catch (dbError) {
-        console.warn(`[syncDatabaseSchema] MSSQL extraction notice:`, dbError);
-        markdownSchema = getFallbackSchemaContext(conn.dbName, conn.schemaContext || "dbo");
-        tableCount = 5;
-        isFallback = true;
+        const errorMsg = dbError instanceof Error ? dbError.message : String(dbError);
+        console.error(`[syncDatabaseSchema] MSSQL extraction error for ${conn.name}:`, errorMsg);
+        return {
+          success: false,
+          error: `SQL Server schema extraction failed: ${errorMsg}`,
+        };
       } finally {
         if (pool) {
           try { await pool.close(); } catch {}
@@ -727,16 +807,30 @@ export async function testDbConnection(
     else {
       let pool: sql.ConnectionPool | null = null;
       try {
-        pool = new sql.ConnectionPool({
+        const baseConfig: sql.config = {
           server: conn.host,
-          port: conn.port || 1433,
+          port: Number(conn.port) || 1433,
           database: conn.dbName,
           user: conn.username,
           password: plainPassword,
-          options: { encrypt: true, trustServerCertificate: true },
-          connectionTimeout: 5000,
-        });
-        await pool.connect();
+          connectionTimeout: 8000,
+        };
+
+        try {
+          pool = new sql.ConnectionPool({
+            ...baseConfig,
+            options: { encrypt: true, trustServerCertificate: true },
+          });
+          await pool.connect();
+        } catch (encErr) {
+          try { await pool?.close(); } catch {}
+          pool = new sql.ConnectionPool({
+            ...baseConfig,
+            options: { encrypt: false, trustServerCertificate: true },
+          });
+          await pool.connect();
+        }
+
         await pool.request().query("SELECT 1 AS alive");
       } finally {
         if (pool) {

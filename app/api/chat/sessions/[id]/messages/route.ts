@@ -64,7 +64,7 @@ export async function POST(
       return NextResponse.json({ success: true, message: createdMsg });
     }
 
-    // 3. Batch sync messages if provided
+    // 3. Batch sync messages if provided (upsert existing and insert new)
     if (Array.isArray(messages) && messages.length > 0) {
       // Find existing message IDs in DB for this session
       const existingMsgs = await prisma.chatMessage.findMany({
@@ -73,30 +73,46 @@ export async function POST(
       });
       const existingIds = new Set(existingMsgs.map((m) => m.id));
 
-      // Filter to new messages not yet in DB (or without persistent IDs)
-      const newMessages = messages.filter(
-        (m) => !existingIds.has(m.id) && m.id !== "welcome-message"
-      );
+      for (const m of messages) {
+        if (!m || m.id === "welcome-message") continue;
 
-      for (const m of newMessages) {
-        await prisma.chatMessage.create({
-          data: {
-            sessionId,
-            role: m.role || "user",
-            content: m.content || "",
-            timestamp: m.timestamp || "Active",
-            connectionId: m.connectionId || null,
-            rawQuery: m.rawQuery || null,
-            isError: Boolean(m.isError),
-            errorMessage: m.errorMessage || null,
-            targetedDatabases: m.targetedDatabases
-              ? JSON.stringify(m.targetedDatabases)
-              : null,
-          },
-        });
+        if (existingIds.has(m.id)) {
+          // Update message with latest completed content and metadata
+          await prisma.chatMessage.update({
+            where: { id: m.id },
+            data: {
+              content: m.content || "",
+              connectionId: m.connectionId || null,
+              rawQuery: m.rawQuery || null,
+              isError: Boolean(m.isError),
+              errorMessage: m.errorMessage || null,
+              targetedDatabases: m.targetedDatabases
+                ? JSON.stringify(m.targetedDatabases)
+                : null,
+            },
+          });
+        } else {
+          // Insert new message
+          await prisma.chatMessage.create({
+            data: {
+              id: m.id,
+              sessionId,
+              role: m.role || "user",
+              content: m.content || "",
+              timestamp: m.timestamp || "Active",
+              connectionId: m.connectionId || null,
+              rawQuery: m.rawQuery || null,
+              isError: Boolean(m.isError),
+              errorMessage: m.errorMessage || null,
+              targetedDatabases: m.targetedDatabases
+                ? JSON.stringify(m.targetedDatabases)
+                : null,
+            },
+          });
+        }
       }
 
-      return NextResponse.json({ success: true, syncedCount: newMessages.length });
+      return NextResponse.json({ success: true, syncedCount: messages.length });
     }
 
     return NextResponse.json({ success: true });

@@ -155,21 +155,27 @@ export async function executeRawQueryOnConnection(
   // 5. Microsoft SQL Server Execution (Default)
   let pool: sql.ConnectionPool | null = null;
   try {
-    const mssqlConfig: sql.config = {
+    const baseConfig: sql.config = {
       server: conn.host,
-      port: conn.port || 1433,
+      port: Number(conn.port) || 1433,
       database: conn.dbName,
       user: conn.username,
       password: plainPassword,
-      options: {
-        encrypt: true,
-        trustServerCertificate: true,
-      },
       connectionTimeout: 8000,
-      requestTimeout: 15000,
+      requestTimeout: 20000,
     };
 
-    pool = await new sql.ConnectionPool(mssqlConfig).connect();
+    try {
+      pool = await new sql.ConnectionPool({
+        ...baseConfig,
+        options: { encrypt: true, trustServerCertificate: true },
+      }).connect();
+    } catch (encErr) {
+      pool = await new sql.ConnectionPool({
+        ...baseConfig,
+        options: { encrypt: false, trustServerCertificate: true },
+      }).connect();
+    }
     const cleanQuery = query.replace(/;\s*$/, "");
     const res = await pool.request().query(cleanQuery);
     return Array.isArray(res.recordset) ? res.recordset : [];

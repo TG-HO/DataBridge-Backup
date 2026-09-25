@@ -109,6 +109,13 @@ ENCRYPTION_KEY="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 AI_PROVIDER="openrouter"
 OPENROUTER_API_KEY="sk-or-v1-your-openrouter-key"
 AI_MODEL="nvidia/nemotron-3-super-120b-a12b:free"
+
+# OPTION 5: ANTHROPIC CLAUDE (Direct Claude Models)
+# AI_PROVIDER="anthropic"
+# ANTHROPIC_API_KEY="sk-ant-api03-your-anthropic-key"
+# CLAUDE_API_KEY="sk-ant-api03-your-anthropic-key"
+# AI_MODEL="claude-3-7-sonnet-20250219"
+# (or "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022")
 ```
 
 ---

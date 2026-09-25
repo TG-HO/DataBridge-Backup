@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.56",
     "@ai-sdk/openai": "^4.0.57",
     "@auth/prisma-adapter": "^2.11.3",
     "@prisma/adapter-mssql": "6.19.3",
