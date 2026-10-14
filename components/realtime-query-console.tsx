@@ -312,9 +312,14 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
   const chatScrollContainerRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom of chat on new messages or stream chunks
+  // Auto-scroll to bottom of chat container on new messages or stream chunks
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (chatScrollContainerRef.current) {
+      chatScrollContainerRef.current.scrollTo({
+        top: chatScrollContainerRef.current.scrollHeight,
+        behavior: "smooth",
+      });
+    }
   }, [messages.length, loading]);
 
   // Close dropdowns when clicking outside
@@ -361,11 +366,20 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
 
   const scrollToMessage = (id: string) => {
     const el = document.getElementById(id);
-    if (el) {
-      el.scrollIntoView({ behavior: "smooth", block: "center" });
-      el.classList.add("ring-2", "ring-indigo-500/50", "transition-all");
+    if (el && chatScrollContainerRef.current) {
+      const containerRect = chatScrollContainerRef.current.getBoundingClientRect();
+      const elRect = el.getBoundingClientRect();
+      const targetScroll =
+        chatScrollContainerRef.current.scrollTop +
+        (elRect.top - containerRect.top) -
+        24;
+      chatScrollContainerRef.current.scrollTo({
+        top: Math.max(0, targetScroll),
+        behavior: "smooth",
+      });
+      el.classList.add("ring-2", "ring-[#00E599]/50", "transition-all");
       setTimeout(() => {
-        el.classList.remove("ring-2", "ring-indigo-500/50");
+        el.classList.remove("ring-2", "ring-[#00E599]/50");
       }, 1500);
     }
   };
@@ -420,18 +434,23 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
     const historyPayload = messages
       .filter((m) => m.id !== "welcome-message" && !m.id.startsWith("welcome-"))
       .slice(-4)
-      .map((m) => ({
-        role: m.role,
-        content: m.role === "assistant" && m.content.length > 350
-          ? m.content.substring(0, 350) + "..."
-          : stripSqlBlocks(m.content),
-      }));
+      .map((m) => {
+        const cleanContent = m.role === "assistant"
+          ? extractSummaryFromRaw(m.content)
+          : m.content;
+        return {
+          role: m.role,
+          content: cleanContent.length > 400
+            ? cleanContent.substring(0, 400) + "..."
+            : stripSqlBlocks(cleanContent),
+        };
+      });
 
     const clientStartTime = Date.now();
     const abortController = new AbortController();
     const timeoutId = setTimeout(() => {
-      abortController.abort("Query timed out after 120 seconds");
-    }, 120000);
+      abortController.abort("Query timed out after 180 seconds");
+    }, 180000);
 
     console.log(
       "%c[DataBridge AI Console]%c Submitting query to /api/chat:",
@@ -542,9 +561,12 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
       console.log(`[DataBridge AI Console] ✅ Response stream completed in ${Date.now() - clientStartTime}ms (${accumulated.length} chars).`);
     } catch (err: unknown) {
       clearTimeout(timeoutId);
-      const isAbort = err === "Query timed out after 120 seconds" || (err instanceof Error && err.name === "AbortError");
+      const isAbort =
+        err === "Query timed out after 180 seconds" ||
+        err === "Query timed out after 120 seconds" ||
+        (err instanceof Error && err.name === "AbortError");
       const errText = isAbort
-        ? "The query request timed out after 120 seconds. The database query or AI synthesis took too long to complete."
+        ? "The query request timed out after 180 seconds. The database query or AI synthesis took too long to complete."
         : err instanceof Error
           ? err.message
           : "Failed to execute query.";
@@ -584,7 +606,7 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
 
   return (
     <div
-      className="relative w-full h-full flex flex-col overflow-hidden bg-cover bg-center"
+      className="relative w-full h-full flex flex-col min-h-0 overflow-hidden bg-cover bg-center"
       style={{
         backgroundImage:
           "url('https://cdn.21st.dev/assets/mirror/c3/c333918af688a4a8a3d004652e6c0ee219457a9d84d380eeb31f513d4b59a09f.png')",
@@ -720,10 +742,10 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
       </div>
 
       {/* Main Conversation Stream Viewport */}
-      <div className="relative z-10 flex-1 flex overflow-hidden">
+      <div className="relative z-10 flex-1 min-h-0 flex flex-col overflow-hidden">
         <div
           ref={chatScrollContainerRef}
-          className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 space-y-6 pr-10 scroll-smooth"
+          className="flex-1 min-h-0 w-full overflow-y-auto p-4 sm:p-6 lg:p-8 space-y-6 pr-12 scroll-smooth"
         >
           {/* Centered Hero Display when No User Messages */}
           {!hasUserQueries && (
@@ -1161,7 +1183,7 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
             </div>
           )}
 
-          <div ref={chatEndRef} />
+          <div ref={chatEndRef} className="h-4 shrink-0" />
         </div>
 
         {/* Right-Side Interactive Message Navigation Rail (Lines) */}
@@ -1209,7 +1231,14 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
 
               <button
                 type="button"
-                onClick={() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" })}
+                onClick={() => {
+                  if (chatScrollContainerRef.current) {
+                    chatScrollContainerRef.current.scrollTo({
+                      top: chatScrollContainerRef.current.scrollHeight,
+                      behavior: "smooth",
+                    });
+                  }
+                }}
                 className="mt-1 p-0.5 rounded-full text-neutral-500 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
                 title="Jump to latest message"
               >
@@ -1279,7 +1308,12 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
               <button
                 type="button"
                 onClick={() => {
-                  chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+                  if (chatScrollContainerRef.current) {
+                    chatScrollContainerRef.current.scrollTo({
+                      top: chatScrollContainerRef.current.scrollHeight,
+                      behavior: "smooth",
+                    });
+                  }
                   setChatMenuOpen(false);
                 }}
                 className="text-xs text-[#00E599] hover:text-[#00E599]/80 font-mono font-medium cursor-pointer"
@@ -1300,7 +1334,7 @@ export default function RealtimeQueryConsole({ connections }: RealtimeQueryConso
       )}
 
       {/* Floating Modern Fintech Input Box Section */}
-      <div className="relative z-20 w-full max-w-4xl mx-auto px-4 pb-4 sm:pb-6">
+      <div className="shrink-0 relative z-20 w-full max-w-4xl mx-auto px-4 pt-1 pb-4 sm:pb-6">
         <div className={cn(
           "relative bg-[#121215] rounded-[10px] border shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)] transition-all",
           enableWebSearch

@@ -161,8 +161,8 @@ export async function executeRawQueryOnConnection(
       database: conn.dbName,
       user: conn.username,
       password: plainPassword,
-      connectionTimeout: 8000,
-      requestTimeout: 20000,
+      connectionTimeout: 15000,
+      requestTimeout: 60000,
     };
 
     try {

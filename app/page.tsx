@@ -65,8 +65,8 @@ export default async function DashboardPage() {
   });
 
   return (
-    <DashboardShell>
-      <div className="flex-1 flex flex-col h-full w-full relative">
+    <DashboardShell noScroll>
+      <div className="flex-1 min-h-0 flex flex-col h-full w-full relative overflow-hidden">
         {connections.length === 0 ? (
           <div className="flex-1 flex items-center justify-center p-6">
             <div className="p-8 sm:p-10 rounded-[10px] bg-[#121215] border border-white/[0.08] text-center space-y-5 max-w-lg shadow-[0_8px_24px_-4px_rgba(0,0,0,0.45)]">

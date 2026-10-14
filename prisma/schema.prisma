@@ -79,6 +79,7 @@ model Organization {
   dbConnections DbConnection[]
   dashboards    Dashboard[]
   querySessions QuerySession[]
+  agents        Agent[]
 }
 
 model OrganizationUser {
@@ -108,6 +109,26 @@ model DbConnection {
   createdAt         DateTime @default(now())
 
   organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  agents       Agent[]
+}
+
+model Agent {
+  id             String       @id @default(uuid())
+  organizationId String
+  connectionId   String
+  name           String
+  description    String       @db.NVarChar(Max)
+  intentKeywords String       @db.NVarChar(Max)
+  systemPrompt   String       @db.NVarChar(Max)
+  tableScope     String       @db.NVarChar(Max)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  connection     DbConnection @relation(fields: [connectionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([organizationId])
+  @@index([connectionId])
 }
 
 model Dashboard {

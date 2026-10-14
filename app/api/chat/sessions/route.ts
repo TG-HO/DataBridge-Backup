@@ -16,7 +16,14 @@ export async function GET() {
     }
 
     const userObj = session.user as { orgId?: string };
-    const orgId = userObj.orgId;
+    let orgId = userObj.orgId;
+
+    if (!orgId) {
+      const membership = await prisma.organizationUser.findFirst({
+        where: { userId: session.user.id },
+      });
+      orgId = membership?.orgId;
+    }
 
     if (!orgId) {
       return NextResponse.json({ error: "No active organization" }, { status: 400 });
@@ -70,7 +77,14 @@ export async function POST(req: Request) {
     }
 
     const userObj = session.user as { orgId?: string };
-    const orgId = userObj.orgId;
+    let orgId = userObj.orgId;
+
+    if (!orgId) {
+      const membership = await prisma.organizationUser.findFirst({
+        where: { userId: session.user.id },
+      });
+      orgId = membership?.orgId;
+    }
 
     if (!orgId) {
       return NextResponse.json({ error: "No active organization" }, { status: 400 });

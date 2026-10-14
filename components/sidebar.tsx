@@ -18,6 +18,7 @@ import {
   LayoutDashboard,
   Copy,
   Check,
+  Bot,
 } from "lucide-react";
 import { useQuerySessions } from "@/lib/query-session-context";
 
@@ -125,6 +126,21 @@ export default function Sidebar({ user }: SidebarProps) {
               <span>Dashboards</span>
               <span className="text-[9px] font-mono text-[#8B5CF6] bg-[#8B5CF6]/10 px-1.5 py-0.5 rounded-[4px] border border-[#8B5CF6]/20">
                 Grid
+              </span>
+            </div>
+          )}
+        </Link>
+        <Link
+          href="/dashboard/agents"
+          className="w-full flex items-center gap-2.5 p-2 rounded-[6px] hover:bg-[#18181B]/60 text-[#A1A1AA] hover:text-[#FAFAFA] text-xs font-medium transition-all group"
+          title="Domain Agents & Semantic Router"
+        >
+          <Bot className="w-4 h-4 text-[#00E599] shrink-0 group-hover:scale-110 transition-transform" />
+          {!isCollapsed && (
+            <div className="flex items-center justify-between flex-1">
+              <span>Domain Agents</span>
+              <span className="text-[9px] font-mono text-[#00E599] bg-[#00E599]/10 px-1.5 py-0.5 rounded-[4px] border border-[#00E599]/20">
+                ERP Router
               </span>
             </div>
           )}

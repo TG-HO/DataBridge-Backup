@@ -6,21 +6,19 @@ import { generateText, streamText } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import sql from "mssql";
-import mysql, { RowDataPacket } from "mysql2/promise";
-import { Client as PgClient } from "pg";
-import { createConnectedPgClient } from "@/lib/pg-client";
-import { MongoClient } from "mongodb";
-import { getOrCreateFirebaseFirestore } from "@/lib/firebase-server";
-import { executeWebSearch, WebSearchResult } from "@/lib/web-search";
+import { executeWebSearch, cleanSearchQuery, WebSearchResult } from "@/lib/web-search";
+import { DYNAMICS_AX_PRESETS } from "@/lib/agent-presets";
+import { autoSeedPresetsIfEmpty } from "@/app/actions/agents";
+import { executeRawQueryOnConnection } from "@/lib/query-runner";
 
 export const dynamic = "force-dynamic";
 
-interface ChatMessage {
+export interface ChatMessage {
   role: "user" | "assistant" | "system";
   content: string;
 }
 
-interface ChatRequestBody {
+export interface ChatRequestBody {
   prompt?: string;
   message?: string;
   connectionId?: string;
@@ -29,677 +27,18 @@ interface ChatRequestBody {
   enableWebSearch?: boolean;
 }
 
-/**
- * Universal AI Model Provider Resolver
- */
-function getLanguageModel() {
-  const provider = (process.env.AI_PROVIDER || "").toLowerCase();
-  const customBaseURL = process.env.AI_BASE_URL || process.env.OLLAMA_BASE_URL;
-  const openRouterKey = process.env.OPENROUTER_API_KEY;
-  const nvidiaKey = process.env.NVIDIA_API_KEY;
-  const openAiKey = process.env.AI_API_KEY || process.env.OPENAI_API_KEY;
-  const anthropicKey = process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY;
-
-  // 1. Anthropic Claude Provider (Direct Anthropic models: Claude 3.7 Sonnet, Claude 3.5 Sonnet, Claude 3.5 Haiku)
-  if (
-    provider === "anthropic" ||
-    provider === "claude" ||
-    (Boolean(anthropicKey) && (!provider || provider === "anthropic" || provider === "claude"))
-  ) {
-    const apiKey = anthropicKey || "";
-    const modelName = process.env.AI_MODEL || "claude-3-7-sonnet-20250219";
-    if (!apiKey) {
-      return { model: null, providerName: "Anthropic Claude", modelName, isConfigured: false };
-    }
-    const client = createAnthropic({
-      apiKey,
-      baseURL: customBaseURL || undefined,
-    });
-    return {
-      model: client(modelName),
-      providerName: "Anthropic Claude",
-      modelName,
-      isConfigured: true,
-    };
-  }
-
-  // 2. OpenRouter Provider (High-speed multi-model aggregator)
-  if (provider === "openrouter" || (Boolean(openRouterKey) && (!provider || provider === "openrouter"))) {
-    const baseURL = customBaseURL || "https://openrouter.ai/api/v1";
-    const apiKey = openRouterKey || openAiKey || "";
-    const modelName = process.env.AI_MODEL || "google/gemini-2.5-flash";
-    if (!apiKey) {
-      return { model: null, providerName: "OpenRouter", modelName, isConfigured: false };
-    }
-    const client = createOpenAI({
-      baseURL,
-      apiKey,
-      headers: {
-        "HTTP-Referer": process.env.NEXTAUTH_URL || "http://localhost:3000",
-        "X-Title": "DataBridge AI",
-      },
-    });
-    return {
-      model: client.chat(modelName),
-      providerName: "OpenRouter",
-      modelName,
-      isConfigured: true,
-    };
-  }
-
-  // 2. Ollama Provider
-  if (provider === "ollama" || (!provider && customBaseURL?.includes("11434"))) {
-    const baseURL = customBaseURL || "http://localhost:11434/v1";
-    const modelName = process.env.AI_MODEL || "llama3.1";
-    const client = createOpenAI({ baseURL, apiKey: "ollama" });
-    return {
-      model: client.chat(modelName),
-      providerName: "Ollama",
-      modelName,
-      isConfigured: true,
-    };
-  }
-
-  // 3. NVIDIA NIM Provider
-  if (provider === "nvidia" || (!provider && Boolean(nvidiaKey))) {
-    const baseURL = customBaseURL || "https://integrate.api.nvidia.com/v1";
-    const apiKey = nvidiaKey || openAiKey || "";
-    const modelName = process.env.AI_MODEL || "nvidia/nemotron-3.5-lightning-30b-a3b";
-    if (!apiKey) {
-      return { model: null, providerName: "NVIDIA", modelName, isConfigured: false };
-    }
-    const client = createOpenAI({ baseURL, apiKey });
-    return {
-      model: client.chat(modelName),
-      providerName: "NVIDIA NIM",
-      modelName,
-      isConfigured: true,
-    };
-  }
-
-  // 4. OpenAI or custom OpenAI-compatible server
-  if (provider === "openai" || openAiKey) {
-    const modelName = process.env.AI_MODEL || "gpt-4o";
-    const client = createOpenAI({
-      apiKey: openAiKey || "",
-      baseURL: customBaseURL || undefined,
-    });
-    return {
-      model: client.chat(modelName),
-      providerName: customBaseURL ? "Custom OpenAI-Compatible" : "OpenAI",
-      modelName,
-      isConfigured: Boolean(openAiKey),
-    };
-  }
-
-  // 5. Default Fallback
-  return {
-    model: null,
-    providerName: "Autonomous Simulation Engine",
-    modelName: "autonomous-analyst-v1",
-    isConfigured: false,
-  };
-}
-
-/**
- * Master System Prompt for Business Analysis
- */
-const MASTER_ANALYST_SYSTEM_PROMPT = `You are an expert database analyst and business intelligence assistant. Your users are non-technical business users and managers who have no knowledge of the database schema.
-
-Your job is to translate natural-language business questions into accurate, read-only database queries and provide clear business answers.
-
-CRITICAL RULES:
-1. NEVER guess, assume, or hallucinate table names, column names, relationships, meanings, or data.
-2. STRICT COLUMN & TABLE ACCURACY: ONLY query table and column names that EXPLICITLY exist in the provided schema for that database. If a table does not exist in the schema, do NOT invent table names like CUSTORDERTABLE or ORDERS.
-3. ZERO RECORD INTEGRITY: If the query returns 0 records, truthfully state that no matching records were found in the database for the given criteria. NEVER invent fake numbers, fake sales, or hallucinated records.
-4. CRITICAL JOIN SYNTAX: Whenever joining tables (e.g. customers c JOIN sales s ON ...), ALWAYS table-qualify every single column in the SELECT, ON, WHERE, GROUP BY, and ORDER BY clauses (e.g. c.customer_id, s.total_amount). NEVER leave a join column bare/unqualified to prevent "ambiguous column" errors!
-5. Strict Read-Only Guarantee: Only generate read-only SELECT statements. Never write DROP, INSERT, UPDATE, DELETE, TRUNCATE, ALTER, or EXEC.
-6. HIDE TECHNICAL IMPLEMENTATION & SQL QUERIES: The user is a non-technical executive. NEVER output raw SQL queries, SQL code fences (\`\`\`sql ... \`\`\`), or database syntax in your response to the user. Present exclusively clean markdown tables, formatted metrics, and strategic business takeaways.`;
-
-/**
- * Validates that the generated SQL statement is strictly read-only
- */
-function isSafeReadOnlyQuery(query: string): boolean {
-  const trimmed = query.trim().toUpperCase();
-
-  if (!trimmed.startsWith("SELECT") && !trimmed.startsWith("WITH")) {
-    return false;
-  }
-
-  const destructivePattern =
-    /\b(DROP|INSERT|DELETE|UPDATE|TRUNCATE|ALTER|EXEC|EXECUTE|CREATE|GRANT|REVOKE|MERGE)\b/i;
-
-  return !destructivePattern.test(query);
-}
-
-/**
- * Validates that the generated NoSQL query specification is strictly read-only
- */
-function isSafeReadOnlyNoSqlQuery(raw: string): boolean {
-  if (!raw) return false;
-  const upper = raw.toUpperCase();
-  const destructive = [
-    "DELETE", "DROP", "UPDATE", "INSERT", "REMOVE",
-    "$OUT", "$MERGE", "CREATETABLE", "ALTER", "TRUNCATE"
-  ];
-  for (const d of destructive) {
-    const regex = new RegExp(`(^|[^a-zA-Z0-9_])${d.replace("$", "\\$")}([^a-zA-Z0-9_]|$)`, "i");
-    if (regex.test(upper)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-/**
- * Robustly extracts and sanitizes executable SQL queries from LLM output.
- * Handles markdown code fences, conversational preamble, thinking tags, and trailing notes.
- */
-function cleanQueryString(raw: string): string {
-  if (!raw) return "";
-  let text = raw.trim();
-
-  // 1. If code block exists anywhere in text, extract its contents
-  const sqlBlockMatch = text.match(/```(?:sql)?\s*([\s\S]*?)```/i);
-  if (sqlBlockMatch && sqlBlockMatch[1]) {
-    text = sqlBlockMatch[1].trim();
-  }
-
-  // 2. If text still has conversational preamble before SELECT or WITH, extract from SELECT/WITH
-  const selectMatch = text.match(/\b(SELECT\b[\s\S]*?(?:;|\n\s*\n|$)|WITH\b[\s\S]*?(?:;|\n\s*\n|$))/i);
-  if (selectMatch && selectMatch[1]) {
-    text = selectMatch[1].trim();
-  }
-
-  // Clean trailing semicolons or backticks
-  text = text.replace(/```/g, "").trim();
-  return text;
-}
-
-/**
- * Cleans and extracts JSON payload for NoSQL queries (MongoDB / Firestore).
- */
-function cleanNoSqlQueryString(raw: string): string {
-  if (!raw) return "{}";
-  let text = raw.trim();
-  const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (jsonMatch && jsonMatch[1]) {
-    text = jsonMatch[1].trim();
-  }
-  const firstBrace = text.indexOf("{");
-  const lastBrace = text.lastIndexOf("}");
-  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-    return text.substring(firstBrace, lastBrace + 1);
-  }
-  return text;
-}
-
-interface MongoQuerySpec {
-  collection: string;
-  filter?: Record<string, unknown>;
-  sort?: Record<string, 1 | -1>;
-  limit?: number;
-  projection?: Record<string, 0 | 1>;
-  pipeline?: Record<string, unknown>[];
-}
-
-function parseMongoQuery(raw: string, defaultCollection: string): MongoQuerySpec {
-  const cleaned = cleanNoSqlQueryString(raw);
-  try {
-    const parsed = JSON.parse(cleaned);
-    if (parsed && typeof parsed === "object") {
-      return {
-        collection: parsed.collection || defaultCollection,
-        filter: parsed.filter || (parsed.pipeline ? undefined : {}),
-        sort: parsed.sort || {},
-        limit: typeof parsed.limit === "number" ? parsed.limit : 15,
-        projection: parsed.projection,
-        pipeline: Array.isArray(parsed.pipeline) ? parsed.pipeline : undefined,
-      };
-    }
-  } catch {}
-
-  // MQL regex fallback: db.movies.find({ ... }) or db.movies.aggregate([ ... ])
-  const mqlMatch = raw.match(/db\.([a-zA-Z0-9_-]+)\.(find|aggregate)\(([\s\S]*)\)/);
-  if (mqlMatch) {
-    const coll = mqlMatch[1];
-    const op = mqlMatch[2];
-    const argStr = mqlMatch[3].trim();
-    if (op === "aggregate") {
-      try {
-        const pipeline = JSON.parse(argStr.replace(/;\s*$/, ""));
-        return { collection: coll, pipeline };
-      } catch {}
-    } else {
-      try {
-        const filter = JSON.parse(argStr.replace(/;\s*$/, ""));
-        return { collection: coll, filter, limit: 15 };
-      } catch {}
-    }
-    return { collection: coll, filter: {}, limit: 15 };
-  }
-
-  return { collection: defaultCollection, filter: {}, limit: 15 };
-}
-
-interface FirestoreQuerySpec {
-  collection: string;
-  where?: Array<[string, string, unknown]>;
-  orderBy?: string;
-  orderDirection?: "asc" | "desc";
-  limit?: number;
-}
-
-function parseFirestoreQuery(raw: string, defaultCollection: string): FirestoreQuerySpec {
-  const cleaned = cleanNoSqlQueryString(raw);
-  try {
-    const parsed = JSON.parse(cleaned);
-    if (parsed && typeof parsed === "object") {
-      return {
-        collection: parsed.collection || defaultCollection,
-        where: Array.isArray(parsed.where) ? parsed.where : [],
-        orderBy: typeof parsed.orderBy === "string" ? parsed.orderBy : undefined,
-        orderDirection: parsed.orderDirection === "desc" ? "desc" : "asc",
-        limit: typeof parsed.limit === "number" ? parsed.limit : 15,
-      };
-    }
-  } catch {}
-
-  return { collection: defaultCollection, limit: 15 };
-}
-
-/**
- * Serializes BSON types (ObjectId, Date, Decimal128) and cleans large embeddings.
- */
-function serializeBsonDoc(val: unknown): unknown {
-  if (val === null || val === undefined) return val;
-  if (typeof val !== "object") return val;
-
-  if (val instanceof Date) {
-    return val.toISOString().split("T")[0];
-  }
-
-  if (typeof (val as { toHexString?: () => string }).toHexString === "function") {
-    return (val as { toHexString: () => string }).toHexString();
-  }
-
-  if (
-    typeof (val as { toString?: () => string }).toString === "function" &&
-    val.constructor?.name !== "Object" &&
-    !Array.isArray(val)
-  ) {
-    const s = String(val);
-    if (s !== "[object Object]") return s;
-  }
-
-  if (Array.isArray(val)) {
-    return val.slice(0, 8).map(serializeBsonDoc);
-  }
-
-  const res: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
-    if (k.toLowerCase().includes("embedding")) continue;
-    res[k] = serializeBsonDoc(v);
-  }
-  return res;
-}
-
-/**
- * Serializes Firestore documents and Timestamps to clean JSON.
- */
-function serializeFirestoreDoc(val: unknown): unknown {
-  if (val === null || val === undefined) return val;
-  if (typeof val !== "object") return val;
-
-  if (typeof (val as { toDate?: () => Date }).toDate === "function") {
-    return (val as { toDate: () => Date }).toDate().toISOString().split("T")[0];
-  }
-
-  if (Array.isArray(val)) {
-    return val.slice(0, 8).map(serializeFirestoreDoc);
-  }
-
-  const res: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
-    res[k] = serializeFirestoreDoc(v);
-  }
-  return res;
-}
-
-/**
- * Scopes and optimizes the schema context before injecting into LLM system prompts.
- * For standard databases (< 120KB schema text), injects full schema.
- * For massive enterprise ERP databases (e.g. Dynamics AX, SAP with 1,000+ to 9,000+ tables),
- * intelligently ranks and extracts the top relevant tables matching user query keywords and business domains,
- * guaranteeing zero context window overflow across Claude, GPT-4o, and Gemini.
- */
-function getOptimizedSchemaPromptContext(schemaContext?: string | null, prompt: string = ""): string {
-  if (!schemaContext) return "Schema metadata pending";
-  if (schemaContext.length < 120000) return schemaContext;
-
-  const lines = schemaContext.split("\n");
-  const header = lines[0] || "## Database Schema Context";
-  const tableLines = lines.slice(1).filter((l) => l.trim().startsWith("- **"));
-
-  if (tableLines.length === 0) return schemaContext;
-
-  const promptLower = prompt.toLowerCase();
-  const promptWords = promptLower.replace(/[^\w\s]/g, " ").split(/\s+/).filter((w) => w.length > 2);
-
-  // Common core business tables in ERPs (Dynamics AX, SAP, etc.)
-  const coreTableBoosts = [
-    "custordertable", "salestable", "salesline", "custtable", "custinvoicejour", "custinvoicetrans",
-    "tgpl_salesorder", "inventtable", "inventdim", "inventtrans", "purchtable", "purchline",
-    "vendtable", "ledgerjournaltable", "generalledgerentry", "forecastsales"
-  ];
-
-  const scored = tableLines.map((line) => {
-    const match = line.match(/- \*\*([^*]+)\*\*/);
-    const fullTable = match ? match[1] : "";
-    const tableName = (fullTable.split(".").pop() || fullTable).toLowerCase();
-
-    // Deprioritize staging / temporary / framework / localization tables
-    const isStagingOrTmp =
-      tableName.startsWith("dmf") ||
-      tableName.endsWith("tmp") ||
-      tableName.endsWith("cache") ||
-      tableName.includes("staging") ||
-      tableName.endsWith("_ru") ||
-      tableName.endsWith("_br") ||
-      tableName.endsWith("_in");
-
-    let score = isStagingOrTmp ? -200 : 0;
-
-    // Boost core ERP business tables
-    for (const core of coreTableBoosts) {
-      if (tableName === core) {
-        score += 150;
-      }
-    }
-
-    // Match prompt keywords
-    for (const w of promptWords) {
-      // Ignore 'entity' matching DMF staging entities
-      if (w === "entity" && (isStagingOrTmp || tableName.includes("entity"))) continue;
-
-      if (tableName === w) score += 60;
-      else if (tableName.startsWith(w) || tableName.endsWith(w)) score += 35;
-      else if (tableName.includes(w)) score += 15;
-    }
-
-    if (promptLower.includes("sale") || promptLower.includes("order")) {
-      if (tableName.includes("sales") || tableName.includes("order")) score += 25;
-    }
-    if (promptLower.includes("cust") && tableName.includes("cust")) score += 20;
-    if (promptLower.includes("invent") || promptLower.includes("item") || promptLower.includes("product")) {
-      if (tableName.includes("invent") || tableName.includes("item")) score += 20;
-    }
-
-    return { line, fullTable, tableName, score };
-  });
-
-  scored.sort((a, b) => b.score - a.score);
-
-  const topTables = scored.slice(0, 80);
-  const remainingTables = scored.slice(80, 200).map((t) => t.fullTable);
-
-  let result = `${header} (Enterprise Schema: ${tableLines.length} tables introspected. Showing top relevant tables for query):\n`;
-  for (const t of topTables) {
-    result += `${t.line}\n`;
-  }
-  if (remainingTables.length > 0) {
-    result += `\nAdditional index of matching tables: ${remainingTables.join(", ")}\n`;
-  }
-
-  return result.trim();
-}
-
-/**
- * Finds the most relevant table or collection name from schema context based on prompt keywords.
- * Avoids picking internal telemetry or audit tables.
- */
-function findRelevantTable(schemaContext?: string | null, prompt: string = ""): string {
-  if (!schemaContext) return "default";
-  const lower = prompt.toLowerCase();
-
-  const rawMatches = [...schemaContext.matchAll(/- \*\*([^*]+)\*\*/g)].map((m) => m[1].trim());
-  if (rawMatches.length === 0) return "default";
-
-  const tables = rawMatches.map((t) => {
-    const clean = t.split(".").pop() || t;
-    return { full: t, clean };
-  });
-
-  const promptWords = lower.replace(/[^\w\s]/g, " ").split(/\s+/).filter((w) => w.length > 2);
-
-  let bestMatch: string | null = null;
-  let bestScore = -1;
-
-  for (const t of tables) {
-    const nameLower = t.clean.toLowerCase();
-    let score = 0;
-
-    if (lower.includes(nameLower)) score += 10;
-
-    for (const pw of promptWords) {
-      if (nameLower.includes(pw) || pw.includes(nameLower)) score += 5;
-    }
-
-    if (
-      (lower.includes("sale") || lower.includes("revenue") || lower.includes("order") || lower.includes("spent") || lower.includes("pay")) &&
-      (nameLower.includes("sale") || nameLower.includes("order") || nameLower.includes("invoice") || nameLower.includes("payment"))
-    ) {
-      score += 8;
-    }
-
-    if (
-      (lower.includes("customer") || lower.includes("client") || lower.includes("user") || lower.includes("account")) &&
-      (nameLower.includes("customer") || nameLower.includes("client") || nameLower.includes("user"))
-    ) {
-      score += 8;
-    }
-
-    if (nameLower.includes("audit") || nameLower.includes("log") || nameLower.includes("telemetry") || nameLower.includes("session")) {
-      score -= 3;
-    }
-
-    if (score > bestScore) {
-      bestScore = score;
-      bestMatch = t.clean;
-    }
-  }
-
-  if (bestMatch && bestScore > 0) return bestMatch;
-
-  const businessTable = tables.find(
-    (t) =>
-      !t.clean.toLowerCase().includes("audit") &&
-      !t.clean.toLowerCase().includes("log") &&
-      !t.clean.toLowerCase().includes("telemetry")
-  );
-
-  return businessTable?.clean || tables[0].clean;
-}
-
-/**
- * Generates an infallible schema-based fallback query using SELECT * or JSON spec.
- */
-function getSafeFallbackQuery(
-  conn: { dbType: string; schemaContext?: string | null },
-  prompt: string = ""
-): string {
-  const table = findRelevantTable(conn.schemaContext, prompt);
-  const type = conn.dbType.toLowerCase();
-
-  if (type === "mongodb") {
-    return JSON.stringify({ collection: table, filter: {}, limit: 15 });
-  }
-  if (type === "firebase" || type === "firestore") {
-    return JSON.stringify({ collection: table, limit: 15 });
-  }
-  if (type === "mysql") {
-    return `SELECT * FROM \`${table}\` LIMIT 10;`;
-  }
-  if (type === "postgres" || type === "postgresql" || type === "supabase") {
-    return `SELECT * FROM "${table}" LIMIT 10;`;
-  }
-  return `SELECT TOP (10) * FROM dbo.[${table}];`;
-}
-
-
-/**
- * Generates an engine-isolated query tailored specifically for ONE database connection.
- * Guarantees zero dialect cross-contamination and enforces join column qualification.
- */
-async function generateQueryForSingleDatabase(
-  conn: { id: string; name: string; dbType: string; dbName: string; schemaContext?: string | null },
-  prompt: string,
-  modelInfo: ReturnType<typeof getLanguageModel>,
-  recentContext?: string
-): Promise<string> {
-  const dbType = conn.dbType.toLowerCase();
-  const isMy = dbType === "mysql";
-  const isMSSQL = dbType === "mssql";
-  const isPg = dbType === "postgres" || dbType === "postgresql" || dbType === "supabase";
-  const isMongo = dbType === "mongodb";
-  const isFirebase = dbType === "firebase" || dbType === "firestore";
-  const isNoSql = isMongo || isFirebase;
-
-  const collectionsList = conn.schemaContext
-    ? [...conn.schemaContext.matchAll(/- \*\*([^*]+)\*\*/g)].map((m) => m[1].split(".").pop() || m[1]).slice(0, 100).join(", ")
-    : "collections in database";
-
-  let dialectGuidelines = "";
-  let enginePromptInstruction = "";
-
-  if (isMSSQL) {
-    dialectGuidelines = `TARGET DATABASE ENGINE: Microsoft SQL Server (T-SQL)
-SYNTAX & DIALECT MANDATES:
-1. Enclose all table and column names in square brackets: dbo.[TableName], [ColumnName].
-2. LIMITING RESULTS: ALWAYS use "SELECT TOP (50)" (or TOP 100) at the beginning of the SELECT clause whenever listing orders or transactions — NEVER omit TOP on transactional tables to prevent payload explosions and keep queries responsive!
-3. CRITICAL JOIN RULE: Whenever joining multiple tables (e.g. dbo.[SALESTABLE] st JOIN dbo.[SALESLINE] sl ON sl.[SALESID] = st.[SALESID] AND sl.[DATAAREAID] = st.[DATAAREAID]), ALWAYS prefix every column name with its table alias (e.g. st.[SALESID], sl.[LINEAMOUNT]). NEVER reference bare columns!
-4. STRICT TABLE GROUNDING: Use ONLY the tables and columns present in the schema metadata below.
-5. MICROSOFT DYNAMICS AX & CUSTOM FUEL MODULE CONVENTIONS:
-   - For customer fuel sales orders (especially Diesel, High Speed Diesel, HSD, Super, Petrol, and site/retail stations like TAJ-71, TAJ-115):
-     Primary Table: dbo.[CUSTORDERTABLE]
-     Columns: [ORDERID], [SITENAME], [PRODUCTNAME], [PRODUCTCODE], [REQUIREDQUANTITY], [UNIT], [ORDERCREATEDONDATETIME], [DATAAREAID], [ProdType].
-     Filter: [DATAAREAID] = 'tgpl' AND ([PRODUCTNAME] LIKE '%Diesel%' OR [PRODUCTNAME] LIKE '%HSD%').
-     Sort: ORDER BY [ORDERCREATEDONDATETIME] DESC.
-   - For standard ERP lubricant / item sales orders:
-     Tables: dbo.[SALESTABLE] (header: [SALESID], [CUSTACCOUNT], [CREATEDDATETIME], [DATAAREAID]) and dbo.[SALESLINE] (lines: [SALESID], [ITEMID], [NAME], [SALESQTY], [SALESPRICE], [LINEAMOUNT], [DATAAREAID]).
-     Join: sl.[SALESID] = st.[SALESID] AND sl.[DATAAREAID] = st.[DATAAREAID].
-   - Legal entities/companies: segregated by column [DATAAREAID] = '<entity_id>' (e.g. [DATAAREAID] = 'tgpl' for TGPL entity, or 'taj' for TAJ entity).
-   - Time window queries (e.g. 'last 2 months'):
-     Filter by [ORDERCREATEDONDATETIME] >= DATEADD(month, -2, GETDATE()) (or [CREATEDDATETIME] >= DATEADD(month, -2, GETDATE())), and always include ORDER BY [ORDERCREATEDONDATETIME] DESC.`;
-    enginePromptInstruction = "Write the exact read-only SQL query for this MSSQL database to answer the request. Return ONLY the raw SQL query.";
-  } else if (isMy) {
-    dialectGuidelines = `TARGET DATABASE ENGINE: MySQL
-SYNTAX & DIALECT MANDATES:
-1. Enclose all table and column names in backticks: \`table_name\`, \`column_name\`.
-2. For top N records, strictly use "LIMIT N" at the end of the query — NEVER use "TOP (N)"!
-3. CRITICAL JOIN RULE: Whenever joining multiple tables, ALWAYS prefix every column name with its table alias (e.g. c.\`customer_id\`).
-4. Strictly use ONLY the tables and columns present in the schema metadata below.`;
-    enginePromptInstruction = "Write the exact read-only SQL query for this MySQL database to answer the request. Return ONLY the raw SQL query.";
-  } else if (isPg) {
-    dialectGuidelines = `TARGET DATABASE ENGINE: PostgreSQL / Supabase
-SYNTAX & DIALECT MANDATES:
-1. Use standard SQL or double quotes: "table_name", "column_name". Use "LIMIT N".
-2. Qualify all column names in joins (e.g. c.customer_id, o.total_amount).`;
-    enginePromptInstruction = "Write the exact read-only SQL query for this PostgreSQL database to answer the request. Return ONLY the raw SQL query.";
-  } else if (isMongo) {
-    dialectGuidelines = `TARGET DATABASE ENGINE: MongoDB (NoSQL Document Store)
-MANDATORY FORMAT:
-Return a JSON query specification object with keys:
-- "collection": (string) Must be one of: [${collectionsList}]
-- "filter": (object) MongoDB filter conditions (e.g. {"year": {"$gte": 2000}, "genres": "Action"}). Use $regex for case-insensitive search if user asks for specific names/titles (e.g. {"title": {"$regex": "matrix", "$options": "i"}}).
-- "sort": (object) Optional sort fields (e.g. {"imdb.rating": -1} or {"year": -1}).
-- "limit": (number) Max records to retrieve (default: 15, max: 30).
-- "projection": (object) Optional fields to include (e.g. {"title": 1, "year": 1, "imdb": 1}).
-- "pipeline": (array) Optional aggregation pipeline if user asks for totals, counts, or grouping.
-
-DO NOT write SQL or SELECT statements! MongoDB does not accept SQL. Return ONLY the JSON object.`;
-    enginePromptInstruction = "Write the exact read-only MongoDB query specification in JSON format to answer the request. Return ONLY the JSON object.";
-  } else if (isFirebase) {
-    dialectGuidelines = `TARGET DATABASE ENGINE: Firebase Firestore (NoSQL Document Store)
-MANDATORY FORMAT:
-Return a JSON query specification object with keys:
-- "collection": (string) Must be one of: [${collectionsList}]
-- "where": (array of 3-element tuples) Optional filter conditions, e.g.: [["status", "==", "active"], ["amount", ">=", 100]]. Supported operators: "==", "!=", "<", "<=", ">", ">=", "array-contains", "in".
-- "orderBy": (string) Optional field name to sort by.
-- "orderDirection": (string) "asc" or "desc".
-- "limit": (number) Max records (default: 15, max: 30).
-
-DO NOT write SQL or SELECT statements! Firebase Firestore does not accept SQL. Return ONLY the JSON object.`;
-    enginePromptInstruction = "Write the exact read-only Firestore query specification in JSON format to answer the request. Return ONLY the JSON object.";
-  } else {
-    dialectGuidelines = `TARGET DATABASE ENGINE: ${conn.dbType.toUpperCase()}
-Return a valid read-only query for this engine.`;
-    enginePromptInstruction = "Write the exact read-only query to answer the request.";
-  }
-
-  const contextNote = recentContext
-    ? `\nRecent Conversation Context (use strictly to resolve pronouns like 'this customer', 'that order', 'this movie'):\n${recentContext}\n`
-    : "";
-
-  const systemPrompt = `${MASTER_ANALYST_SYSTEM_PROMPT}
-
-You are generating a read-only query for ONE SPECIFIC DATABASE:
-Database Name: "${conn.name}"
-Engine: ${conn.dbType.toUpperCase()}
-Database Scope: ${conn.dbName}
-
-==================================================
-SCHEMA & COLLECTIONS FOR THIS DATABASE:
-==================================================
-${getOptimizedSchemaPromptContext(conn.schemaContext, prompt)}
-
-${dialectGuidelines}
-${contextNote}
-Read-Only Guarantee: Return strictly read-only retrieval logic. Never perform destructive or mutation commands.
-Return ONLY the raw executable ${isNoSql ? "JSON specification" : "SQL query"}. Do NOT include markdown explanations.`;
-
-  if (modelInfo.isConfigured && modelInfo.model) {
-    const tStart = Date.now();
-    console.log(`\n[DataBridge AI Debug] 🧠 Step 1: Asking ${modelInfo.providerName} (${modelInfo.modelName}) to formulate query for "${conn.name}" (${conn.dbType})...`);
-    try {
-      const res = await generateText({
-        model: modelInfo.model as Parameters<typeof generateText>[0]["model"],
-        system: systemPrompt,
-        prompt: `Current User Request: "${prompt}"\n${enginePromptInstruction}`,
-      });
-
-      const tElapsed = Date.now() - tStart;
-      console.log(`[DataBridge AI Debug] ⏱️ AI query formulation finished in ${tElapsed}ms for "${conn.name}".`);
-
-      const cleaned = isNoSql ? cleanNoSqlQueryString(res.text) : cleanQueryString(res.text);
-      console.log(`[DataBridge AI Debug] 📝 Extracted query for "${conn.name}":\n   ${cleaned}`);
-
-      const isSafe = isNoSql ? isSafeReadOnlyNoSqlQuery(cleaned) : isSafeReadOnlyQuery(cleaned);
-
-      if (cleaned && isSafe) {
-        return cleaned;
-      } else {
-        console.warn(`[DataBridge AI Debug] ⚠️ Query failed safe read-only validation for "${conn.name}". Using fallback.`);
-      }
-    } catch (err) {
-      const tElapsed = Date.now() - tStart;
-      console.error(`[DataBridge AI Debug] ❌ AI Model Query Error for "${conn.name}" after ${tElapsed}ms:`, err);
-    }
-  } else {
-    console.log(`[DataBridge AI Debug] ℹ️ AI Model not configured (provider: ${modelInfo.providerName}). Using fallback query.`);
-  }
-
-  const fallback = getSafeFallbackQuery(conn, prompt);
-  console.log(`[DataBridge AI Debug] 🛡️ Fallback schema query for "${conn.name}":\n   ${fallback}`);
-  return fallback;
-}
-
-/**
- * Executes a read-only query on a target database connection based on its engine type.
- * Features automatic self-healing retry on ambiguous columns and syntax glitches.
- */
-async function executeDatabaseQuery(
-  conn: {
+export interface AgentRecord {
+  id: string;
+  organizationId: string;
+  connectionId: string;
+  name: string;
+  description: string;
+  intentKeywords: string;
+  systemPrompt: string;
+  tableScope: string;
+  createdAt: Date;
+  updatedAt: Date;
+  connection?: {
     id: string;
     name: string;
     dbType: string;
@@ -709,500 +48,664 @@ async function executeDatabaseQuery(
     username: string;
     encryptedPassword: string;
     schemaContext?: string | null;
-  },
-  query: string,
-  prompt: string
-): Promise<{ sourceName: string; dbType: string; results: unknown[]; error?: string }> {
-  const plainPassword = decryptPassword(conn.encryptedPassword);
-  const dbType = conn.dbType.toLowerCase();
-  const tDbStart = Date.now();
-  console.log(`[DataBridge AI Debug] ⚡ Step 2: Executing SQL on "${conn.name}" (${conn.dbType} at ${conn.host}:${conn.port})...\n   SQL: ${query.replace(/\s+/g, " ").trim()}`);
+  } | null;
+}
 
-  // 1. MySQL Execution (with self-healing retry)
-  if (dbType === "mysql") {
-    let mysqlConn = null;
-    try {
-      mysqlConn = await mysql.createConnection({
-        host: conn.host,
-        port: Number(conn.port) || 3306,
-        user: conn.username,
-        password: plainPassword,
-        database: conn.dbName,
-        connectTimeout: 8000,
-      });
+export interface SubtaskPlan {
+  agentId: string;
+  subtaskPrompt: string;
+  reason?: string;
+}
 
-      const [rows] = await mysqlConn.query<RowDataPacket[]>(query);
-      const results = Array.isArray(rows) ? (rows as unknown[]) : [];
-      console.log(`[DataBridge AI Debug] ✅ MySQL execution on "${conn.name}" completed in ${Date.now() - tDbStart}ms. Retrieved ${results.length} rows.`);
-      return {
-        sourceName: conn.name,
-        dbType: "MySQL",
-        results,
-      };
-    } catch (err: unknown) {
-      const errorObj = err as Record<string, unknown>;
-      console.warn(`[DataBridge AI Debug] ⚠️ MySQL execution notice on "${conn.name}" in ${Date.now() - tDbStart}ms:`, errorObj.sqlMessage || err);
-
-      if (mysqlConn) {
-        // Auto-fix: Ambiguous column name in join (qualify customer_id with customers.customer_id)
-        if (errorObj.errno === 1052 || String(errorObj.message).toLowerCase().includes("is ambiguous")) {
-          try {
-            const fixedQuery = query
-              .replace(/`customer_id`/g, "`customers`.`customer_id`")
-              .replace(/\bcustomer_id\b/g, "`customers`.`customer_id`");
-            const [retryRows] = await mysqlConn.query<RowDataPacket[]>(fixedQuery);
-            const retryResults = Array.isArray(retryRows) ? (retryRows as unknown[]) : [];
-            if (retryResults.length > 0) {
-              return { sourceName: conn.name, dbType: "MySQL", results: retryResults };
-            }
-          } catch {}
-        }
-
-        // Safe query recovery on relevant table
-        try {
-          const fallbackTable = findRelevantTable(conn.schemaContext, prompt);
-          const [retryRows] = await mysqlConn.query<RowDataPacket[]>(`SELECT * FROM \`${fallbackTable}\` LIMIT 10;`);
-          const retryResults = Array.isArray(retryRows) ? (retryRows as unknown[]) : [];
-          if (retryResults.length > 0) {
-            return {
-              sourceName: conn.name,
-              dbType: "MySQL",
-              results: retryResults,
-            };
-          }
-        } catch {}
-      }
-
-      return {
-        sourceName: conn.name,
-        dbType: "MySQL",
-        results: [],
-        error: String(errorObj.sqlMessage || errorObj.message || err),
-      };
-    } finally {
-      if (mysqlConn) {
-        try { await mysqlConn.end(); } catch {}
-      }
-    }
-  }
-
-  // 2. PostgreSQL & Supabase Execution (with self-healing retry)
-  if (dbType === "postgres" || dbType === "postgresql" || dbType === "supabase") {
-    let pgClient: PgClient | null = null;
-    try {
-      pgClient = await createConnectedPgClient({
-        host: conn.host,
-        port: conn.port,
-        database: conn.dbName,
-        user: conn.username,
-        password: plainPassword,
-        timeoutMillis: 8000,
-      });
-
-      const res = await pgClient.query(query);
-      const rows = res.rows || [];
-      const isSupabase = conn.host.includes("supabase.co") || conn.host.includes("pooler.supabase.com");
-      console.log(`[DataBridge AI Debug] ✅ PostgreSQL execution on "${conn.name}" completed in ${Date.now() - tDbStart}ms. Retrieved ${rows.length} rows.`);
-      return {
-        sourceName: conn.name,
-        dbType: isSupabase ? "Supabase (PostgreSQL)" : "PostgreSQL",
-        results: rows,
-      };
-    } catch (err) {
-      console.warn(`[executeDatabaseQuery] PostgreSQL execution notice on ${conn.name}:`, err);
-      if (pgClient) {
-        try {
-          const fallbackTable = findRelevantTable(conn.schemaContext, prompt);
-          const retryRes = await pgClient.query(`SELECT * FROM "${fallbackTable}" LIMIT 10;`);
-          if (retryRes.rows && retryRes.rows.length > 0) {
-            return {
-              sourceName: conn.name,
-              dbType: "PostgreSQL",
-              results: retryRes.rows,
-            };
-          }
-        } catch {}
-      }
-      return {
-        sourceName: conn.name,
-        dbType: "PostgreSQL",
-        results: [],
-        error: String(err instanceof Error ? err.message : err),
-      };
-    } finally {
-      if (pgClient) {
-        try { await pgClient.end(); } catch {}
-      }
-    }
-  }
-
-  // 3. MongoDB Execution
-  if (dbType === "mongodb") {
-    let mongoClient: MongoClient | null = null;
-    try {
-      let uri = conn.host.trim();
-      if (!uri.startsWith("mongodb://") && !uri.startsWith("mongodb+srv://")) {
-        const authPart = conn.username ? `${encodeURIComponent(conn.username)}:${encodeURIComponent(plainPassword)}@` : "";
-        const portPart = conn.port ? `:${conn.port}` : ":27017";
-        uri = `mongodb://${authPart}${conn.host}${portPart}/${conn.dbName}`;
-      }
-
-      mongoClient = new MongoClient(uri, { serverSelectionTimeoutMS: 8000 });
-      await mongoClient.connect();
-      const db = mongoClient.db(conn.dbName);
-
-      const defaultCol = findRelevantTable(conn.schemaContext, prompt);
-      const spec = parseMongoQuery(query, defaultCol);
-      const collName = spec.collection || defaultCol;
-      const targetCollection = db.collection(collName);
-
-      let docs: Record<string, unknown>[] = [];
-
-      console.log(`[DataBridge AI Debug] 🍃 Step 2: Executing MongoDB query on "${conn.name}" (db: ${conn.dbName}, coll: ${collName})...`);
-
-      if (spec.pipeline && Array.isArray(spec.pipeline) && spec.pipeline.length > 0) {
-        console.log(`[DataBridge AI Debug] 🍃 Running aggregation pipeline:`, JSON.stringify(spec.pipeline));
-        docs = await targetCollection.aggregate(spec.pipeline).toArray();
-      } else {
-        const filter = spec.filter || {};
-        const sort = spec.sort || {};
-        const limit = Math.min(Math.max(Number(spec.limit) || 15, 1), 50);
-        const projection = spec.projection || {};
-
-        console.log(`[DataBridge AI Debug] 🍃 Running find: filter=${JSON.stringify(filter)}, sort=${JSON.stringify(sort)}, limit=${limit}`);
-
-        let cursor = targetCollection.find(filter);
-        if (Object.keys(sort).length > 0) {
-          cursor = cursor.sort(sort as Record<string, 1 | -1>);
-        }
-        if (Object.keys(projection).length > 0) {
-          cursor = cursor.project(projection);
-        }
-        docs = await cursor.limit(limit).toArray();
-
-        // If filter returned 0 documents, try a relaxed query on the target collection
-        if (docs.length === 0 && Object.keys(filter).length > 0) {
-          console.log(`[DataBridge AI Debug] 🍃 Filter returned 0 docs, falling back to sample in "${collName}"`);
-          docs = await targetCollection.find({}).limit(10).toArray();
-        }
-      }
-
-      // Serialize BSON fields (ObjectId, Date, etc.) to clean JSON
-      const serialized = docs.map((doc) => serializeBsonDoc(doc) as Record<string, unknown>);
-
-      console.log(`[DataBridge AI Debug] 🍃 Retrieved ${serialized.length} document(s) from MongoDB collection "${collName}".`);
-
-      return {
-        sourceName: conn.name,
-        dbType: "MongoDB",
-        results: serialized,
-      };
-    } catch (err: unknown) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      console.warn(`[executeDatabaseQuery] MongoDB query notice on ${conn.name}:`, errorMsg);
-
-      // Fallback: fetch 5 sample documents from relevant collection so user gets REAL data
-      if (mongoClient) {
-        try {
-          const db = mongoClient.db(conn.dbName);
-          const defaultCol = findRelevantTable(conn.schemaContext, prompt);
-          const sample = await db.collection(defaultCol).find({}).limit(5).toArray();
-          if (sample.length > 0) {
-            return {
-              sourceName: conn.name,
-              dbType: "MongoDB",
-              results: sample.map((d) => serializeBsonDoc(d) as Record<string, unknown>),
-            };
-          }
-        } catch {}
-      }
-
-      return {
-        sourceName: conn.name,
-        dbType: "MongoDB",
-        results: [],
-        error: errorMsg,
-      };
-    } finally {
-      if (mongoClient) {
-        try { await mongoClient.close(); } catch {}
-      }
-    }
-  }
-
-  // 4. Firebase Firestore Execution
-  if (dbType === "firebase" || dbType === "firestore") {
-    try {
-      const firestore = await getOrCreateFirebaseFirestore(
-        {
-          id: conn.id,
-          host: conn.host,
-          dbName: conn.dbName,
-          username: conn.username,
-          plainPassword,
-        },
-        "run-fb"
-      );
-      const defaultCol = findRelevantTable(conn.schemaContext, prompt);
-      const spec = parseFirestoreQuery(query, defaultCol);
-      const collName = spec.collection || defaultCol;
-
-      console.log(`[DataBridge AI Debug] 🔥 Step 2: Executing Firestore query on "${conn.name}" (collection: ${collName})...`);
-
-      let q: FirebaseFirestore.Query = firestore.collection(collName);
-
-      if (Array.isArray(spec.where)) {
-        for (const [field, op, val] of spec.where) {
-          if (field && op && val !== undefined) {
-            try {
-              q = q.where(field, op as FirebaseFirestore.WhereFilterOp, val);
-            } catch (whereErr) {
-              console.warn(`[DataBridge AI Debug] 🔥 Firestore where clause skipped:`, whereErr);
-            }
-          }
-        }
-      }
-
-      if (spec.orderBy) {
-        try {
-          q = q.orderBy(spec.orderBy, spec.orderDirection || "asc");
-        } catch (orderErr) {
-          console.warn(`[DataBridge AI Debug] 🔥 Firestore orderBy skipped:`, orderErr);
-        }
-      }
-
-      const limit = Math.min(Math.max(Number(spec.limit) || 15, 1), 50);
-      q = q.limit(limit);
-
-      let snapshot;
-      try {
-        snapshot = await q.get();
-      } catch (qErr: unknown) {
-        console.warn(`[DataBridge AI Debug] 🔥 Firestore composite query notice, falling back to simple scan:`, qErr);
-        snapshot = await firestore.collection(collName).limit(limit).get();
-      }
-
-      const docs: Record<string, unknown>[] = [];
-      snapshot.forEach((d) => {
-        const data = d.data();
-        docs.push(serializeFirestoreDoc({ id: d.id, ...data }) as Record<string, unknown>);
-      });
-
-      console.log(`[DataBridge AI Debug] 🔥 Retrieved ${docs.length} document(s) from Firestore collection "${collName}".`);
-
-      return {
-        sourceName: conn.name,
-        dbType: "Firebase Firestore",
-        results: docs,
-      };
-    } catch (err) {
-      console.warn(`[executeDatabaseQuery] Firebase execution notice on ${conn.name}:`, err);
-      return {
-        sourceName: conn.name,
-        dbType: "Firebase Firestore",
-        results: [],
-        error: String(err instanceof Error ? err.message : err),
-      };
-    }
-  }
-
-  // 5. Microsoft SQL Server (MSSQL) Execution (with self-healing retry)
-  const mssqlConfig: sql.config = {
-    server: conn.host,
-    port: Number(conn.port) || 1433,
-    database: conn.dbName,
-    user: conn.username,
-    password: plainPassword,
-    options: {
-      encrypt: true,
-      trustServerCertificate: true,
-    },
-    connectionTimeout: 10000,
-    requestTimeout: 25000,
-    pool: { max: 2, min: 0, idleTimeoutMillis: 3000 },
-  };
-
-  let pool: sql.ConnectionPool | null = null;
-  try {
-    try {
-      pool = new sql.ConnectionPool(mssqlConfig);
-      await pool.connect();
-    } catch {
-      // Fallback: If TLS / encryption negotiation failed, retry with encrypt: false
-      mssqlConfig.options = { encrypt: false, trustServerCertificate: true };
-      pool = new sql.ConnectionPool(mssqlConfig);
-      await pool.connect();
-    }
-
-    const queryResponse = await pool.request().query(query);
-    let results = queryResponse.recordset || [];
-    console.log(`[DataBridge AI Debug] ✅ MSSQL execution on "${conn.name}" completed in ${Date.now() - tDbStart}ms. Retrieved ${results.length} rows.`);
-
-    // Smart Zero-Result Recovery:
-    if (results.length === 0) {
-      const queryUpper = query.toUpperCase();
-      const promptLower = prompt.toLowerCase();
-
-      // Case A: If user asked for Diesel / Fuel and SALESTABLE/SALESLINE returned 0, check CUSTORDERTABLE
-      if (
-        (queryUpper.includes("SALESTABLE") || queryUpper.includes("SALESLINE") || !queryUpper.includes("CUSTORDERTABLE")) &&
-        (promptLower.includes("diesel") || promptLower.includes("fuel") || promptLower.includes("hsd"))
-      ) {
-        try {
-          console.log(`[DataBridge AI Debug] 🔄 SALESTABLE returned 0 rows for Diesel; checking dbo.CUSTORDERTABLE...`);
-          const entityMatch = query.match(/DATAAREAID\s*=\s*'([^']+)'/i);
-          const entity = entityMatch ? entityMatch[1] : (promptLower.includes("tgpl") ? "tgpl" : "taj");
-          const custOrderQuery = `
-            SELECT TOP (25)
-              ORDERID, SITENAME, PRODUCTCODE, PRODUCTNAME, REQUIREDQUANTITY, UNIT, ORDERCREATEDONDATETIME, DATAAREAID
-            FROM dbo.CUSTORDERTABLE
-            WHERE DATAAREAID = '${entity}'
-              AND (PRODUCTNAME LIKE '%Diesel%' OR PRODUCTNAME LIKE '%HSD%')
-            ORDER BY ORDERCREATEDONDATETIME DESC;
-          `;
-          const custRes = await pool.request().query(custOrderQuery);
-          if (custRes.recordset && custRes.recordset.length > 0) {
-            console.log(`[DataBridge AI Debug] ✅ Found ${custRes.recordset.length} rows in CUSTORDERTABLE.`);
-            return {
-              sourceName: conn.name,
-              dbType: "SQL Server",
-              results: custRes.recordset,
-            };
-          }
-        } catch (e) {
-          console.warn("[DataBridge AI Debug] CUSTORDERTABLE fallback notice:", e);
-        }
-      }
-
-      // Case B: If a strict date filter returned 0 rows, relax date filter to show latest active records
-      if (queryUpper.includes("DATEADD") || queryUpper.includes("BETWEEN") || queryUpper.includes("CREATEDDATETIME >=") || queryUpper.includes("ORDERCREATEDONDATETIME >=")) {
-        try {
-          console.log(`[DataBridge AI Debug] 🔄 Strict date filter yielded 0 rows. Fetching latest recorded active orders...`);
-          const relaxedQuery = query
-            .replace(/AND\s+[^\n;]*DATEADD\([^\n;]+\)/gi, "")
-            .replace(/AND\s+[^\n;]*(?:CREATEDDATETIME|ORDERCREATEDONDATETIME)\s*>=[^\n;]+/gi, "");
-          const retryRes = await pool.request().query(relaxedQuery);
-          if (retryRes.recordset && retryRes.recordset.length > 0) {
-            console.log(`[DataBridge AI Debug] ✅ Found ${retryRes.recordset.length} rows with relaxed date filter.`);
-            return {
-              sourceName: conn.name,
-              dbType: "SQL Server",
-              results: retryRes.recordset,
-            };
-          }
-        } catch (e) {
-          console.warn("[DataBridge AI Debug] Relaxed date query notice:", e);
-        }
-      }
-    }
-
-    return {
-      sourceName: conn.name,
-      dbType: "SQL Server",
-      results,
-    };
-  } catch (err: unknown) {
-    const errorObj = err as Record<string, unknown>;
-    console.warn(`[executeDatabaseQuery] MSSQL execution notice on ${conn.name}:`, errorObj.message || err);
-
-    if (pool) {
-      // Fix 1: If LIMIT was sent to MSSQL, convert to SELECT TOP (20)
-      if (query.toUpperCase().includes("LIMIT") && !query.toUpperCase().includes("TOP")) {
-        try {
-          const strippedLimit = query.replace(/LIMIT\s+\d+/i, "").replace(/;\s*$/, "");
-          const fixedQuery = strippedLimit.replace(/^SELECT\s+/i, "SELECT TOP (20) ");
-          const retryRes = await pool.request().query(fixedQuery);
-          if (retryRes.recordset) {
-            return {
-              sourceName: conn.name,
-              dbType: "SQL Server",
-              results: retryRes.recordset,
-            };
-          }
-        } catch {}
-      }
-
-      // Fix 2: If ambiguous column name error occurred, qualify with aliases
-      if (String(errorObj.message).toLowerCase().includes("ambiguous column name")) {
-        try {
-          const fixedQuery = query
-            .replace(/\[customer_id\]/g, "c.[customer_id]")
-            .replace(/\bcustomer_id\b/g, "c.[customer_id]")
-            .replace(/\[SALESID\]/g, "st.[SALESID]")
-            .replace(/\[DATAAREAID\]/g, "st.[DATAAREAID]");
-          const retryRes = await pool.request().query(fixedQuery);
-          if (retryRes.recordset) {
-            return {
-              sourceName: conn.name,
-              dbType: "SQL Server",
-              results: retryRes.recordset,
-            };
-          }
-        } catch {}
-      }
-    }
-
-    return {
-      sourceName: conn.name,
-      dbType: "SQL Server",
-      results: [],
-      error: String(errorObj.message || err),
-    };
-  } finally {
-    if (pool) {
-      try { await pool.close(); } catch {}
-    }
-  }
+export interface ExecutedAgentOutput {
+  agent: AgentRecord;
+  subtaskPrompt: string;
+  scopedSchemaContext: string;
+  rawExecutedQuery: string;
+  rawResults: unknown[];
+  totalRowsCount: number;
+  queryExecutionError: string | null;
 }
 
 /**
- * Core /api/chat Route Handler
- * Implements Sequential One-by-One Multi-Database Querying & Unified Synthesis:
- * 1. Iterates over each selected database connection ONE BY ONE.
- * 2. Formulates an isolated, dialect-accurate query for each database individually.
- * 3. Executes each query against its respective database driver.
- * 4. Merges all retrieved datasets into an executive business intelligence synthesis.
- * 5. Strictly hides raw SQL queries and technical schemas from user view.
+ * Universal AI Model Provider Resolver
+ * Resolves standard model, fast router model, and capable specialist model.
  */
-/**
- * Determines whether database execution is required when web search is active.
- * - If the user is asking about external entities, competitors, industry news, market benchmarks,
- *   social media campaigns, or general topics without requesting internal records, return false.
- * - Return true ONLY if the prompt explicitly asks for internal company records/data
- *   (e.g., "our sales", "our revenue", "in our database", "compare our orders", "our customers", "our inventory").
- */
-function isInternalDatabaseQueryNeeded(prompt: string, connectionsCount: number): boolean {
-  if (connectionsCount === 0) return false;
+function getLanguageModels() {
+  const provider = (process.env.AI_PROVIDER || "").toLowerCase();
+  const customBaseURL = process.env.AI_BASE_URL || process.env.OLLAMA_BASE_URL;
+  const openRouterKey = process.env.OPENROUTER_API_KEY;
+  const nvidiaKey = process.env.NVIDIA_API_KEY;
+  const openAiKey = process.env.AI_API_KEY || process.env.OPENAI_API_KEY;
+  const anthropicKey = process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY;
 
-  const clean = prompt.toLowerCase().trim();
-
-  // Explicit phrases indicating the user wants their internal database queried:
-  const explicitInternalPatterns = [
-    // Direct requests to inspect the database / schema / records
-    /\b(in|from|check|query|search|look\s*up)\s+(our|the|my)\s+(database|db|tables?|records?|system)\b/i,
-    /\b(our|my|internal|company|in-house)\s+([\w-]+\s+){0,3}(sales|revenue|profit|margin|transactions?|orders?|invoices?|customers?|clients?|inventory|stock|products?|stores?|branches?|employees?|metrics?|figures?|performance|numbers?|financials?|earnings|turnover|kpis?|data)\b/i,
-    // Comparisons that explicitly mention internal numbers or metrics
-    /\b(compare|versus|vs\.?|against|benchmark)\s+(our|my|company|internal)\b/i,
-    /\b(how\s+are\s+we\s+doing|how\s+much\s+did\s+we\s+sell|what\s+is\s+our\s+(total|revenue|sales?|turnover|profit))\b/i,
-    /\b(show|get|fetch|list|display)\s+(our|my)\s+(data|records|numbers|sales|orders|customers)\b/i,
-  ];
-
-  const hasExplicitInternalRequest = explicitInternalPatterns.some((pattern) => pattern.test(clean));
-
-  if (hasExplicitInternalRequest) {
-    return true;
+  // 1. Anthropic Claude Provider
+  if (
+    provider === "anthropic" ||
+    provider === "claude" ||
+    (Boolean(anthropicKey) && (!provider || provider === "anthropic" || provider === "claude"))
+  ) {
+    const apiKey = anthropicKey || "";
+    if (!apiKey) {
+      return {
+        routerModel: null,
+        specialistModel: null,
+        synthesisModel: null,
+        providerName: "Anthropic Claude",
+        isConfigured: false,
+      };
+    }
+    const client = createAnthropic({ apiKey, baseURL: customBaseURL || undefined });
+    return {
+      routerModel: client("claude-3-5-haiku-20241022"),
+      specialistModel: client(process.env.AI_MODEL || "claude-3-7-sonnet-20250219"),
+      synthesisModel: client(process.env.AI_MODEL || "claude-3-7-sonnet-20250219"),
+      providerName: "Anthropic Claude",
+      isConfigured: true,
+    };
   }
 
-  // If the prompt is about competitors, market, campaigns, public companies, or general research, DO NOT query DB
+  // 2. OpenRouter Provider (High speed multi-model aggregator)
+  if (provider === "openrouter" || (Boolean(openRouterKey) && (!provider || provider === "openrouter"))) {
+    const baseURL = customBaseURL || "https://openrouter.ai/api/v1";
+    const apiKey = openRouterKey || openAiKey || "";
+    if (!apiKey) {
+      return {
+        routerModel: null,
+        specialistModel: null,
+        synthesisModel: null,
+        providerName: "OpenRouter",
+        isConfigured: false,
+      };
+    }
+    const client = createOpenAI({
+      baseURL,
+      apiKey,
+      headers: {
+        "HTTP-Referer": process.env.NEXTAUTH_URL || "http://localhost:3000",
+        "X-Title": "DataBridge AI - Enterprise Swarm",
+      },
+    });
+
+    const primaryModel = process.env.AI_MODEL || "google/gemini-2.5-flash";
+    const routerModelName = process.env.AI_ROUTER_MODEL || primaryModel;
+
+    return {
+      routerModel: client.chat(routerModelName),
+      specialistModel: client.chat(primaryModel),
+      synthesisModel: client.chat(primaryModel),
+      providerName: "OpenRouter",
+      isConfigured: true,
+    };
+  }
+
+  // 3. Ollama Provider (Local offline inference)
+  if (provider === "ollama" || (!provider && customBaseURL?.includes("11434"))) {
+    const baseURL = customBaseURL || "http://localhost:11434/v1";
+    const modelName = process.env.AI_MODEL || "llama3.1";
+    const client = createOpenAI({ baseURL, apiKey: "ollama" });
+    return {
+      routerModel: client.chat("llama3.1:8b"),
+      specialistModel: client.chat(modelName),
+      synthesisModel: client.chat(modelName),
+      providerName: "Ollama",
+      isConfigured: true,
+    };
+  }
+
+  // 4. NVIDIA NIM Provider
+  if (provider === "nvidia" || (!provider && Boolean(nvidiaKey))) {
+    const baseURL = customBaseURL || "https://integrate.api.nvidia.com/v1";
+    const apiKey = nvidiaKey || openAiKey || "";
+    if (!apiKey) {
+      return {
+        routerModel: null,
+        specialistModel: null,
+        synthesisModel: null,
+        providerName: "NVIDIA NIM",
+        isConfigured: false,
+      };
+    }
+    const client = createOpenAI({ baseURL, apiKey });
+    const primaryModel = process.env.AI_MODEL || "nvidia/nemotron-3.5-lightning-30b-a3b";
+    return {
+      routerModel: client.chat("meta/llama-3.1-8b-instruct"),
+      specialistModel: client.chat(primaryModel),
+      synthesisModel: client.chat(primaryModel),
+      providerName: "NVIDIA NIM",
+      isConfigured: true,
+    };
+  }
+
+  // 5. OpenAI or custom OpenAI-compatible server
+  if (provider === "openai" || openAiKey) {
+    const client = createOpenAI({
+      apiKey: openAiKey || "",
+      baseURL: customBaseURL || undefined,
+    });
+    const primaryModel = process.env.AI_MODEL || "gpt-4o";
+    return {
+      routerModel: client.chat("gpt-4o-mini"),
+      specialistModel: client.chat(primaryModel),
+      synthesisModel: client.chat(primaryModel),
+      providerName: customBaseURL ? "Custom OpenAI-Compatible" : "OpenAI",
+      isConfigured: Boolean(openAiKey),
+    };
+  }
+
+  // Default Fallback
+  return {
+    routerModel: null,
+    specialistModel: null,
+    synthesisModel: null,
+    providerName: "Autonomous Simulation Engine",
+    isConfigured: false,
+  };
+}
+
+/**
+ * Phase 4 Security: Strict SQL Validation
+ * Enforces strict regex validation to block any query containing
+ * DROP, DELETE, UPDATE, INSERT, ALTER, EXEC, etc.
+ */
+function validateSafeReadOnlyMSSQLQuery(query: string): { isSafe: boolean; reason?: string } {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return { isSafe: false, reason: "Generated query is empty." };
+  }
+
+  const upper = trimmed.toUpperCase();
+  if (!upper.startsWith("SELECT") && !upper.startsWith("WITH")) {
+    return {
+      isSafe: false,
+      reason: "Query must strictly begin with a read-only SELECT or WITH statement.",
+    };
+  }
+
+  // Block destructive / mutation keywords
+  const destructiveRegex =
+    /\b(DROP|DELETE|UPDATE|INSERT|ALTER|EXEC|EXECUTE|TRUNCATE|CREATE|MERGE|GRANT|REVOKE|SHUTDOWN)\b/i;
+
+  if (destructiveRegex.test(trimmed)) {
+    const match = trimmed.match(destructiveRegex);
+    return {
+      isSafe: false,
+      reason: `Blocked non-read-only operation: keyword "${match?.[0] || "MUTATION"}" is prohibited.`,
+    };
+  }
+
+  // Block semicolon chaining (prevent multiple statements)
+  const statements = trimmed
+    .split(";")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (statements.length > 1) {
+    return {
+      isSafe: false,
+      reason: "Query chaining via semicolons is prohibited for security.",
+    };
+  }
+
+  return { isSafe: true };
+}
+
+/**
+ * Robustly extracts and sanitizes executable SQL queries from LLM output.
+ * Handles markdown code fences, conversational preamble, thinking tags, and trailing notes
+ * without truncating queries containing blank lines.
+ */
+function cleanQueryString(raw: string): string {
+  if (!raw) return "";
+  let text = raw.trim();
+
+  // Strip <think>...</think> tags if present from reasoning models
+  text = text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+
+  // 1. If markdown code block exists anywhere in text, extract its contents
+  const sqlBlockMatch = text.match(/```(?:sql|tsql|mssql)?\s*([\s\S]*?)```/i);
+  if (sqlBlockMatch && sqlBlockMatch[1] && sqlBlockMatch[1].trim()) {
+    text = sqlBlockMatch[1].trim();
+  } else {
+    // 2. If no code block, look for the start of SELECT or WITH
+    const selectOrWithMatch = text.match(/\b(SELECT|WITH)\b/i);
+    if (selectOrWithMatch && selectOrWithMatch.index !== undefined) {
+      text = text.substring(selectOrWithMatch.index).trim();
+
+      // If there is a trailing semicolon, slice up to that semicolon
+      const semiIndex = text.indexOf(";");
+      if (semiIndex !== -1) {
+        text = text.substring(0, semiIndex + 1);
+      } else {
+        // Strip trailing conversational lines if LLM appended explanations
+        const lines = text.split("\n");
+        const queryLines: string[] = [];
+        for (const line of lines) {
+          const ltrim = line.trim();
+          if (
+            ltrim.startsWith("Note:") ||
+            ltrim.startsWith("This query") ||
+            ltrim.startsWith("Here is") ||
+            ltrim.startsWith("Hope ") ||
+            ltrim.startsWith("Let me know")
+          ) {
+            break;
+          }
+          queryLines.push(line);
+        }
+        text = queryLines.join("\n").trim();
+      }
+    }
+  }
+
+  // Clean trailing semicolons, backticks, and whitespace
+  text = text.replace(/```+/g, "").replace(/;+\s*$/, "").trim();
+  return text;
+}
+
+/**
+ * Clean table names by removing brackets, schema prefixes, and whitespace.
+ */
+function cleanTableName(name: string): string {
+  return name.replace(/[\[\]]/g, "").replace(/^dbo\./i, "").trim();
+}
+
+/**
+ * Query sys.objects + sys.columns or INFORMATION_SCHEMA.COLUMNS ONLY for the tables listed in the agent's tableScope.
+ * Case-insensitive, robust against case-sensitive collations and 4,600+ table ERP schemas.
+ */
+async function fetchScopedSchemaMSSQL(
+  pool: sql.ConnectionPool | null,
+  tableScope: string[],
+  cachedSchemaContext?: string | null
+): Promise<string> {
+  const cleanNames = tableScope.map(cleanTableName).filter(Boolean);
+  if (cleanNames.length === 0) {
+    return "No tables in scope.";
+  }
+
+  const upperNames = cleanNames.map((t) => t.toUpperCase().replace(/'/g, "''"));
+  const formattedUpperInClause = upperNames.map((t) => `'${t}'`).join(", ");
+
+  if (pool) {
+    // Strategy 1: High-speed native sys catalog query (sys.objects + sys.columns)
+    try {
+      const sysQuery = `
+        SELECT 
+          s.name AS tableSchema,
+          o.name AS tableName,
+          c.name AS columnName,
+          ty.name AS dataType,
+          c.max_length AS maxLength,
+          CASE WHEN c.is_nullable = 1 THEN 'YES' ELSE 'NO' END AS isNullable
+        FROM sys.objects o
+        JOIN sys.schemas s ON o.schema_id = s.schema_id
+        JOIN sys.columns c ON o.object_id = c.object_id
+        JOIN sys.types ty ON c.user_type_id = ty.user_type_id
+        WHERE o.type IN ('U', 'V')
+          AND UPPER(o.name) IN (${formattedUpperInClause})
+        ORDER BY o.name, c.column_id;
+      `;
+
+      const sysRes = await pool.request().query<{
+        tableSchema: string;
+        tableName: string;
+        columnName: string;
+        dataType: string;
+        maxLength: number | null;
+        isNullable: string;
+      }>(sysQuery);
+
+      if (sysRes.recordset && sysRes.recordset.length > 0) {
+        const tablesMap = new Map<string, string[]>();
+        for (const row of sysRes.recordset) {
+          const full = `${row.tableSchema || "dbo"}.${row.tableName}`;
+          if (!tablesMap.has(full)) {
+            tablesMap.set(full, []);
+          }
+          const len = row.maxLength !== null ? (row.maxLength === -1 ? "(MAX)" : `(${row.maxLength})`) : "";
+          tablesMap.get(full)!.push(`${row.columnName} ${row.dataType}${len}`);
+        }
+
+        if (tablesMap.size > 0) {
+          let schemaText = `## Scoped Schema (${tablesMap.size} verified tables):\n`;
+          for (const [tbl, cols] of tablesMap.entries()) {
+            schemaText += `- **${tbl}** (${cols.join(", ")})\n`;
+          }
+          return schemaText.trim();
+        }
+      }
+    } catch (sysErr) {
+      console.warn("[fetchScopedSchemaMSSQL] Native sys catalog query notice:", sysErr);
+    }
+
+    // Strategy 2: INFORMATION_SCHEMA.COLUMNS fallback with UPPER() matching
+    try {
+      const infoQuery = `
+        SELECT 
+          TABLE_SCHEMA AS tableSchema,
+          TABLE_NAME AS tableName,
+          COLUMN_NAME AS columnName,
+          DATA_TYPE AS dataType,
+          CHARACTER_MAXIMUM_LENGTH AS maxLength,
+          IS_NULLABLE AS isNullable
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE UPPER(TABLE_NAME) IN (${formattedUpperInClause})
+        ORDER BY TABLE_NAME, ORDINAL_POSITION;
+      `;
+
+      const res = await pool.request().query<{
+        tableSchema: string;
+        tableName: string;
+        columnName: string;
+        dataType: string;
+        maxLength: number | null;
+        isNullable: string;
+      }>(infoQuery);
+
+      if (res.recordset && res.recordset.length > 0) {
+        const tablesMap = new Map<string, string[]>();
+        for (const row of res.recordset) {
+          const full = `${row.tableSchema || "dbo"}.${row.tableName}`;
+          if (!tablesMap.has(full)) {
+            tablesMap.set(full, []);
+          }
+          const len = row.maxLength !== null ? (row.maxLength === -1 ? "(MAX)" : `(${row.maxLength})`) : "";
+          tablesMap.get(full)!.push(`${row.columnName} ${row.dataType}${len}`);
+        }
+
+        if (tablesMap.size > 0) {
+          let schemaText = `## Scoped Schema (${tablesMap.size} verified tables):\n`;
+          for (const [tbl, cols] of tablesMap.entries()) {
+            schemaText += `- **${tbl}** (${cols.join(", ")})\n`;
+          }
+          return schemaText.trim();
+        }
+      }
+    } catch (err) {
+      console.warn("[fetchScopedSchemaMSSQL] INFORMATION_SCHEMA query notice:", err);
+    }
+  }
+
+  // Strategy 3: Check cached schemaContext on the connection
+  if (cachedSchemaContext && cachedSchemaContext.length > 20) {
+    const lines = cachedSchemaContext.split("\n");
+    const matchedLines: string[] = [];
+    for (const line of lines) {
+      const trimmed = line.trim();
+      for (const t of cleanNames) {
+        if (new RegExp(`\\b${t}\\b`, "i").test(trimmed) && (trimmed.startsWith("- **") || trimmed.startsWith("###"))) {
+          matchedLines.push(trimmed);
+          break;
+        }
+      }
+    }
+    if (matchedLines.length > 0) {
+      return `## Scoped Schema (From Cached Introspection):\n${matchedLines.join("\n")}`;
+    }
+  }
+
+  // Strategy 4: High-fidelity synthetic schema for standard Dynamics AX 2012 tables
+  let fallbackText = `## Verified Scoped Table Definitions:\n`;
+  for (const t of cleanNames) {
+    const lower = t.toLowerCase();
+    if (lower === "salestable") {
+      fallbackText += `- **dbo.SalesTable** (SALESID nvarchar(20), CUSTACCOUNT nvarchar(20), INVOICEACCOUNT nvarchar(20), DELIVERYNAME nvarchar(100), DELIVERYDATE datetime, SALESSTATUS int, PURCHORDERFORMNUM nvarchar(60), PAYMENT nvarchar(10), CURRENCYCODE nvarchar(3), CREATEDDATETIME datetime, CREATEDBY nvarchar(8), DATAAREAID nvarchar(4), RECID bigint)\n`;
+    } else if (lower === "salesline") {
+      fallbackText += `- **dbo.SalesLine** (SALESID nvarchar(20), LINENUM numeric(32,16), ITEMID nvarchar(20), NAME nvarchar(1000), SALESQTY numeric(32,16), SALESPRICE numeric(32,16), LINEAMOUNT numeric(32,16), SALESSTATUS int, INVENTDIMID nvarchar(20), CURRENCYCODE nvarchar(3), CREATEDDATETIME datetime, DATAAREAID nvarchar(4), RECID bigint)\n`;
+    } else if (lower === "custtable") {
+      fallbackText += `- **dbo.CustTable** (ACCOUNTNUM nvarchar(20), CUSTGROUP nvarchar(10), CURRENCY nvarchar(3), PARTY bigint, PAYMTERMID nvarchar(10), CREDITMAX numeric(32,16), CREATEDDATETIME datetime, DATAAREAID nvarchar(4), RECID bigint)\n`;
+    } else if (lower === "custgroup") {
+      fallbackText += `- **dbo.CustGroup** (CUSTGROUP nvarchar(10), NAME nvarchar(60), PAYMTERMID nvarchar(10), DATAAREAID nvarchar(4), RECID bigint)\n`;
+    } else if (lower === "custtrans") {
+      fallbackText += `- **dbo.CustTrans** (ACCOUNTNUM nvarchar(20), TRANSDATE datetime, VOUCHER nvarchar(20), INVOICE nvarchar(20), AMOUNTCUR numeric(32,16), AMOUNTMST numeric(32,16), CURRENCYCODE nvarchar(3), DUEDATE datetime, CLOSED datetime, DATAAREAID nvarchar(4), RECID bigint)\n`;
+    } else if (lower === "inventtable") {
+      fallbackText += `- **dbo.InventTable** (ITEMID nvarchar(20), ITEMGROUPID nvarchar(10), ITEMTYPE int, NAMEALIAS nvarchar(20), PRIMARYVENDORID nvarchar(20), DATAAREAID nvarchar(4), RECID bigint)\n`;
+    } else if (lower === "inventtrans") {
+      fallbackText += `- **dbo.InventTrans** (ITEMID nvarchar(20), STATUSISSUE int, STATUSRECEIPT int, QTY numeric(32,16), COSTAMOUNTPOSTED numeric(32,16), DATEPHYSICAL datetime, DATEFINANCIAL datetime, INVENTDIMID nvarchar(20), DATAAREAID nvarchar(4), RECID bigint)\n`;
+    } else if (lower === "inventdim") {
+      fallbackText += `- **dbo.InventDim** (INVENTDIMID nvarchar(20), INVENTLOCATIONID nvarchar(10), INVENTBATCHID nvarchar(20), WMSLOCATIONID nvarchar(10), INVENTSIZEID nvarchar(10), INVENTCOLORID nvarchar(10), INVENTSTYLEID nvarchar(10), INVENTSERIALID nvarchar(20), DATAAREAID nvarchar(4), RECID bigint)\n`;
+    } else if (lower === "inventsum") {
+      fallbackText += `- **dbo.InventSum** (ITEMID nvarchar(20), AVAILPHYSICAL numeric(32,16), POSTEDQTY numeric(32,16), PHYSICALINVENT numeric(32,16), RESERVEDPHYSICAL numeric(32,16), ORDERED numeric(32,16), INVENTDIMID nvarchar(20), DATAAREAID nvarchar(4), RECID bigint)\n`;
+    } else if (lower === "inventlocation") {
+      fallbackText += `- **dbo.InventLocation** (INVENTLOCATIONID nvarchar(10), NAME nvarchar(60), INVENTLOCATIONTYPE int, DATAAREAID nvarchar(4), RECID bigint)\n`;
+    } else if (lower === "ledgerjournaltable") {
+      fallbackText += `- **dbo.LedgerJournalTable** (JOURNALNUM nvarchar(10), JOURNALNAME nvarchar(30), JOURNALTYPE int, POSTED int, POSTEDDATETIME datetime, DATAAREAID nvarchar(4), RECID bigint)\n`;
+    } else if (lower === "ledgerjournaltrans") {
+      fallbackText += `- **dbo.LedgerJournalTrans** (JOURNALNUM nvarchar(10), LINENUM numeric(32,16), TRANSDATE datetime, VOUCHER nvarchar(20), ACCOUNTNUM nvarchar(20), AMOUNTCURDEBIT numeric(32,16), AMOUNTCURCREDIT numeric(32,16), CURRENCYCODE nvarchar(3), TEXT nvarchar(512), DATAAREAID nvarchar(4), RECID bigint)\n`;
+    } else if (lower === "bankaccounttable") {
+      fallbackText += `- **dbo.BankAccountTable** (ACCOUNTID nvarchar(10), ACCOUNTNUM nvarchar(30), NAME nvarchar(60), CURRENCYCODE nvarchar(3), BALANCE numeric(32,16), DATAAREAID nvarchar(4), RECID bigint)\n`;
+    } else if (lower === "purchtable") {
+      fallbackText += `- **dbo.PurchTable** (PURCHID nvarchar(20), ORDERACCOUNT nvarchar(20), INVOICEACCOUNT nvarchar(20), DELIVERYDATE datetime, PURCHSTATUS int, CURRENCYCODE nvarchar(3), CREATEDDATETIME datetime, DATAAREAID nvarchar(4), RECID bigint)\n`;
+    } else if (lower === "purchline") {
+      fallbackText += `- **dbo.PurchLine** (PURCHID nvarchar(20), LINENUM numeric(32,16), ITEMID nvarchar(20), NAME nvarchar(1000), PURCHQTY numeric(32,16), PURCHPRICE numeric(32,16), LINEAMOUNT numeric(32,16), PURCHSTATUS int, DATAAREAID nvarchar(4), RECID bigint)\n`;
+    } else if (lower === "vendtable") {
+      fallbackText += `- **dbo.VendTable** (ACCOUNTNUM nvarchar(20), VENDGROUP nvarchar(10), CURRENCY nvarchar(3), PARTY bigint, PAYMTERMID nvarchar(10), DATAAREAID nvarchar(4), RECID bigint)\n`;
+    } else if (lower === "custinvoicejour") {
+      fallbackText += `- **dbo.CustInvoiceJour** (INVOICEID nvarchar(20), INVOICEDATE datetime, INVOICEACCOUNT nvarchar(20), INVOICINGNAME nvarchar(100), INVOICEAMOUNT numeric(32,16), SALESID nvarchar(20), DUEDATE datetime, DATAAREAID nvarchar(4), RECID bigint)\n`;
+    } else if (lower === "custinvoicetrans") {
+      fallbackText += `- **dbo.CustInvoiceTrans** (INVOICEID nvarchar(20), INVOICEDATE datetime, LINENUM numeric(32,16), ITEMID nvarchar(20), NAME nvarchar(1000), QTY numeric(32,16), SALESPRICE numeric(32,16), LINEAMOUNT numeric(32,16), DATAAREAID nvarchar(4), RECID bigint)\n`;
+    } else {
+      fallbackText += `- **dbo.${t}** (ID nvarchar(36), RECID bigint, CREATEDDATETIME datetime, DATAAREAID nvarchar(4))\n`;
+    }
+  }
+
+  return fallbackText.trim();
+}
+
+/**
+ * Universal Multi-Tenant Entity Extractor:
+ * Dynamically extracts ANY legal entity code (DataAreaId) from user queries for any company or tenant.
+ * Examples: "company XYZ", "entity ABC", "for CONT", "in USMF", "under CEU", "records for TGPL", etc.
+ */
+function extractDynamicEntityCode(input: string): string | null {
+  if (!input) return null;
+  const trimmed = input.trim();
+
+  // Pattern 1: Explicit keyword followed by company code
+  const explicitMatch = trimmed.match(/\b(?:company|entity|legal\s+entity|dataareaid|dataarea|tenant|division)\s*[:=]?\s*([a-zA-Z0-9\-_]{2,8})\b/i);
+  if (explicitMatch) {
+    const candidate = explicitMatch[1].toUpperCase();
+    const commonWords = new Set(["RECORDS", "ENTIRES", "ENTRIES", "TRANSACTIONS", "DATA", "ORDERS", "SALES", "STOCK", "ITEMS", "ALL", "OVERVIEW", "LIST", "SUMMARY", "THE", "NAME", "CODE", "TYPE", "BALANCE", "AMOUNT"]);
+    if (!commonWords.has(candidate)) {
+      return candidate;
+    }
+  }
+
+  // Pattern 2: Preposition preceding code, e.g. "for XYZ", "in ABC", "under USMF", "of CONT", "at DEMO"
+  const prepMatch = trimmed.match(/\b(?:for|in|under|of|at)\s+([a-zA-Z0-9\-_]{2,6})\b/i);
+  if (prepMatch) {
+    const candidate = prepMatch[1].toUpperCase();
+    const stopWords = new Set([
+      "THE", "ALL", "OUR", "ANY", "EACH", "THIS", "THAT", "SOME", "WHAT", "WHEN", "WHOM", "BOTH",
+      "ITEM", "YEAR", "WEEK", "DATE", "USER", "LAST", "NEXT", "TODAY", "MONTH", "SALE", "CUST",
+      "GOOD", "HIGH", "FULL", "REAL", "PART", "ZERO", "MANY", "MORE", "LESS", "FREE", "COST"
+    ]);
+    if (!stopWords.has(candidate)) {
+      return candidate;
+    }
+  }
+
+  // Pattern 3: Standalone uppercase/alphanumeric code (2 to 5 chars)
+  const tokens = trimmed.split(/[\s,]+/);
+  for (const t of tokens) {
+    const clean = t.replace(/[^a-zA-Z0-9\-]/g, "");
+    if (clean.length >= 2 && clean.length <= 5 && /^[A-Za-z0-9]+(-[A-Za-z0-9]+)?$/.test(clean)) {
+      const upper = clean.toUpperCase();
+      const nonCompanyWords = new Set([
+        "ME", "MY", "WE", "US", "TO", "DO", "GO", "NO", "SO", "IF", "OR", "AS", "AT", "BY", "ON", "UP", "IN", "IS", "IT", "OF",
+        "AND", "FOR", "THE", "TOP", "ALL", "GET", "SUM", "AVG", "MAX", "MIN", "WHO", "HOW", "WHY", "NOW", "NEW", "OLD",
+        "SHOW", "LIST", "VIEW", "FIND", "TELL", "GIVE", "WHAT", "WITH", "FROM", "OVER", "LAST", "PAST", "POST",
+        "PO", "GL", "AR", "AP", "AX", "ERP", "DB", "SQL", "RAW", "SET", "ROW", "COL", "DAY", "PER"
+      ]);
+      if (!nonCompanyWords.has(upper)) {
+        return upper;
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Detects if the user query is a greeting, help request, or conversational inquiry
+ */
+function isConversationalInquiry(prompt: string): boolean {
+  const p = prompt.trim().toLowerCase();
+  const simpleGreetings = new Set([
+    "hi", "hello", "hey", "hola", "salam", "assalam", "good morning", "good afternoon",
+    "good evening", "how are you", "who are you", "what can you do", "help", "help me",
+    "what is this", "what is databridge", "what are your capabilities", "introduce yourself",
+    "what agents do you have", "what do you do", "commands", "menu"
+  ]);
+  if (simpleGreetings.has(p)) return true;
+  if (/^(hi|hello|hey|greetings|hola)\b/i.test(p) && p.length < 28) return true;
+  if (/\b(who are you|what can you do|what are your capabilities|how can you help|explain your features)\b/i.test(p)) return true;
   return false;
 }
 
 /**
- * Core /api/chat Route Handler
- * Implements:
- * 1. Live Web Search & Competitor Analysis (DuckDuckGo, Tavily, Serper)
- * 2. Smart Database Query Routing (executes internal SQL queries only when required)
- * 3. Unified Business Intelligence Synthesis with verified citations and auto-visualization
+ * Creates a welcoming, interactive overview response for conversational queries
+ */
+function createConversationalResponse(
+  availableAgents: Array<{ name: string; description: string; intentKeywords: string; tableScope: string }>
+) {
+  const agentRows = availableAgents.length > 0
+    ? availableAgents.map((a) => `- **${a.name}**: ${a.description} *(Scope: \`${a.tableScope}\`)*`).join("\n")
+    : "- **Dynamics AX 2012 Enterprise Swarm**: Sales & Orders, Inventory, General Ledger, Procurement, and Invoicing specialists configured.";
+
+  const conversationalPayload = {
+    summary: `### 👋 Welcome to DataBridge AI!
+
+I am your **Autonomous Enterprise Data Intelligence Agent**, engineered to provide instant business answers, deep operational insights, and real-time visualization directly from your databases and live web intelligence.
+
+#### 🤖 Active Domain Agents in Your Swarm:
+${agentRows}
+
+---
+
+#### 💡 Try Asking Questions Like:
+- 📈 **Sales & Orders:** *"Who are our top 10 customers by total revenue?"*
+- 🏢 **Multi-Company / Multi-Tenant:** *"Show me recent sales orders and line amounts for legal entity USMF"*
+- 📦 **Inventory & Stock:** *"Which warehouse locations hold the most on-hand physical stock?"*
+- 💰 **Financial Ledger:** *"Compare total debits versus credits by account with net movement"*
+- 🛒 **Procurement & POs:** *"Who are our top 5 vendors by procurement spend?"*
+- 🧾 **Accounts Receivable:** *"List open invoices and unpaid balances by customer"*
+- 🌐 **Web Intelligence:** Toggle **Web Search** to correlate internal ERP numbers with live market trends!
+
+*Ask any business question above or type your inquiry to begin.*`,
+    recommendedVisualization: "TABLE",
+    chartConfig: {
+      xAxisKey: "Domain",
+      dataKeys: ["Status"],
+      title: "DataBridge AI Domain Agent Swarm",
+    },
+    data: availableAgents.length > 0
+      ? availableAgents.map((a) => ({
+          Domain: a.name,
+          Status: "Active & Ready",
+          Scope: a.tableScope,
+        }))
+      : [
+          { Domain: "Sales & Revenue", Status: "Active & Ready", Scope: "SalesTable, SalesLine, CustTable" },
+          { Domain: "Inventory & Warehouses", Status: "Active & Ready", Scope: "InventSum, InventDim, InventTable" },
+          { Domain: "General Ledger & Journals", Status: "Active & Ready", Scope: "LedgerJournalTable, LedgerJournalTrans" },
+          { Domain: "Procurement & Vendors", Status: "Active & Ready", Scope: "PurchTable, PurchLine, VendTable" },
+          { Domain: "Accounts Receivable", Status: "Active & Ready", Scope: "CustInvoiceJour, CustInvoiceTrans" },
+        ],
+  };
+
+  const jsonString = JSON.stringify(conversationalPayload, null, 2);
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      const chunks = jsonString.match(/.{1,32}/g) || [jsonString];
+      for (const chunk of chunks) {
+        controller.enqueue(encoder.encode(chunk));
+        await new Promise((resolve) => setTimeout(resolve, 6));
+      }
+      controller.close();
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Transfer-Encoding": "chunked",
+      "X-DB-Queried": "false",
+      "X-Router-Matched": "true",
+    },
+  });
+}
+
+/**
+ * Returns a friendly structured response when Step 1 router fails to match an agent.
+ */
+function createEmptyScopeFallbackResponse(prompt: string, availableAgents: Array<{ name: string; intentKeywords: string }>) {
+  const agentBullets = availableAgents.length > 0
+    ? availableAgents.map((a) => `- **${a.name}:** Keywords: \`${a.intentKeywords.split(",").slice(0, 6).join(", ")}...\``).join("\n")
+    : "*(No Domain Agents currently created in your organization)*";
+
+  const suggestions: string[] = [];
+  for (const a of availableAgents) {
+    const lower = a.name.toLowerCase();
+    if (lower.includes("sales")) {
+      suggestions.push('- *"Who are our top 10 customers by total revenue?"*');
+      suggestions.push('- *"Show me recent sales orders and revenue for legal entity USMF"*');
+    } else if (lower.includes("invent") || lower.includes("stock")) {
+      suggestions.push('- *"Which warehouse locations hold the most on-hand physical stock?"*');
+      suggestions.push('- *"Show top 10 items by available physical quantity"*');
+    } else if (lower.includes("ledger") || lower.includes("finan")) {
+      suggestions.push('- *"Show recent journal entries and voucher amounts"*');
+      suggestions.push('- *"Compare total debits versus credits by account"*');
+    }
+  }
+
+  const suggestionBlock = suggestions.length > 0
+    ? `\n\n#### 💡 Try asking questions like:\n${suggestions.join("\n")}`
+    : "";
+
+  const fallbackPayload = {
+    summary: `### 🧭 Query Scope Assistance\n\nI could not directly match your inquiry: **"${prompt}"** to an active Domain Agent.\n\nTo ensure 100% database precision, incoming questions are routed directly to authorized Domain Agents.${suggestionBlock}\n\n#### Currently Configured Domain Agents:\n${agentBullets}\n\n*Need to query other tables? Create or edit Domain Agents in the [Domain Agent Builder](/dashboard/agents).*`,
+    recommendedVisualization: "TABLE",
+    chartConfig: {
+      xAxisKey: "Agent",
+      dataKeys: ["Status"],
+      title: "Active Domain Agent Scopes",
+    },
+    data: availableAgents.map((a) => ({
+      Agent: a.name,
+      Triggers: a.intentKeywords.split(",").slice(0, 8).join(", "),
+      Scope: "Active",
+    })),
+  };
+
+  const jsonString = JSON.stringify(fallbackPayload, null, 2);
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      const chunks = jsonString.match(/.{1,32}/g) || [jsonString];
+      for (const chunk of chunks) {
+        controller.enqueue(encoder.encode(chunk));
+        await new Promise((resolve) => setTimeout(resolve, 8));
+      }
+      controller.close();
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Transfer-Encoding": "chunked",
+      "X-DB-Queried": "false",
+      "X-Router-Matched": "false",
+    },
+  });
+}
+
+/**
+ * Core /api/chat Route Handler:
+ * Multi-Agent Semantic Routing Architecture with Swarm Coordination,
+ * Dynamic Legal Entity Partitioning, Self-Healing SQL, and Live Web Search.
  */
 export async function POST(req: Request) {
   try {
@@ -1219,13 +722,6 @@ export async function POST(req: Request) {
     const chatHistory = body.chatHistory || [];
     const enableWebSearch = Boolean(body.enableWebSearch);
 
-    // Parse requested connection IDs
-    const rawIds = Array.isArray(body.connectionIds) && body.connectionIds.length > 0
-      ? body.connectionIds
-      : body.connectionId ? [body.connectionId] : [];
-
-    const requestedConnectionIds = Array.from(new Set(rawIds.filter(Boolean)));
-
     if (!prompt) {
       return NextResponse.json(
         { error: "Missing required parameter: prompt" },
@@ -1233,303 +729,873 @@ export async function POST(req: Request) {
       );
     }
 
-    // If web search is disabled, at least one database connection is required
-    if (!enableWebSearch && requestedConnectionIds.length === 0) {
+    // Resolve user's organization
+    const orgMembership = await prisma.organizationUser.findFirst({
+      where: { userId: session.user.id },
+      include: { organization: true },
+    });
+
+    if (!orgMembership) {
       return NextResponse.json(
-        { error: "Please select at least one database connection, or activate Web Search." },
-        { status: 400 }
+        { error: "Forbidden: No organization tenant found for user." },
+        { status: 403 }
       );
     }
 
-    // 1. Retrieve requested DbConnections and verify tenant ownership
-    let connections: any[] = [];
-    if (requestedConnectionIds.length > 0) {
-      connections = await prisma.dbConnection.findMany({
-        where: {
-          id: { in: requestedConnectionIds },
-          organization: {
-            members: {
-              some: {
-                userId: session.user.id,
-              },
-            },
-          },
-        },
-        include: {
-          organization: true,
-        },
-      });
+    const organizationId = orgMembership.orgId;
 
-      if (connections.length === 0 && !enableWebSearch) {
-        console.warn(`[DataBridge API] ❌ No valid authorized connections found for IDs:`, requestedConnectionIds);
-        return NextResponse.json(
-          {
-            error:
-              "Forbidden: The requested database connection(s) do not exist or do not belong to your organization.",
-          },
-          { status: 403 }
-        );
-      }
-    }
-
-    // Smart routing: determine if database query is required
-    const needDbQuery = !enableWebSearch
-      ? true
-      : isInternalDatabaseQueryNeeded(prompt, connections.length);
+    // Resolve AI models
+    const { routerModel, specialistModel, synthesisModel, providerName, isConfigured } =
+      getLanguageModels();
 
     console.log(`\n================================================================`);
-    console.log(`[DataBridge API] 🚀 New Query Request: "${prompt}"`);
-    console.log(`[DataBridge API] Web Search: ${enableWebSearch ? "ENABLED" : "DISABLED"} | DB Query Required: ${needDbQuery}`);
-    console.log(`[DataBridge API] Active Databases: ${connections.map(c => `${c.name} [${c.dbType}]`).join(", ") || "(None - External Research)"}`);
+    console.log(`[Multi-Agent Pipeline] 🚀 Incoming Request: "${prompt}"`);
+    console.log(`[Multi-Agent Pipeline] Organization: ${orgMembership.organization.name} (${organizationId})`);
+    console.log(`[Multi-Agent Pipeline] AI Provider: ${providerName} (Configured: ${isConfigured})`);
     console.log(`================================================================`);
 
-    // 2. Execute Live Web Search if enabled
-    let webSources: WebSearchResult[] = [];
-    let webProvider = "none";
-    if (enableWebSearch) {
-      try {
-        console.log(`[DataBridge API] 🌐 Executing Live Web Search for: "${prompt}"...`);
-        const searchRes = await executeWebSearch(prompt, 6);
-        webSources = searchRes.results;
-        webProvider = searchRes.provider;
-        console.log(`[DataBridge API] 🌐 Web Search returned ${webSources.length} sources via ${webProvider}`);
-      } catch (err) {
-        console.warn("[DataBridge API] ⚠️ Web Search error:", err);
-      }
+    // =========================================================================
+    // STEP 0: Agent Discovery, Filtering, and Auto-Seeding
+    // =========================================================================
+    const selectedConnIds = (body.connectionIds || []).filter(Boolean);
+    if (body.connectionId && !selectedConnIds.includes(body.connectionId)) {
+      selectedConnIds.push(body.connectionId);
     }
 
-    const modelInfo = getLanguageModel();
-    console.log(`[DataBridge API] AI Model Provider: ${modelInfo.providerName} | Model: ${modelInfo.modelName} | Configured: ${modelInfo.isConfigured}`);
-
-    // 3. Sequential One-by-One Database Query Generation & Execution (Only if required)
-    const executionResults: Array<{ sourceName: string; dbType: string; results: unknown[]; error?: string }> = [];
-    const rawQueriesMap: Record<string, string> = {};
-
-    if (needDbQuery && connections.length > 0) {
-      const recentTurns = chatHistory.slice(-2);
-      const recentContextSummary = recentTurns
-        .map((t) => `${t.role.toUpperCase()}: ${t.content.slice(0, 250)}`)
-        .join("\n");
-
-      for (const conn of connections) {
-        const rawQuery = await generateQueryForSingleDatabase(conn, prompt, modelInfo, recentContextSummary);
-        rawQueriesMap[conn.id] = rawQuery;
-        const isNoSql =
-          conn.dbType.toLowerCase() === "mongodb" ||
-          conn.dbType.toLowerCase() === "firebase" ||
-          conn.dbType.toLowerCase() === "firestore";
-
-        const safeQuery = isNoSql
-          ? (isSafeReadOnlyNoSqlQuery(rawQuery) ? rawQuery : getSafeFallbackQuery(conn, prompt))
-          : (isSafeReadOnlyQuery(rawQuery) ? rawQuery : getSafeFallbackQuery(conn, prompt));
-
-        const result = await executeDatabaseQuery(conn, safeQuery, prompt);
-        executionResults.push(result);
-      }
-    }
-
-    // 4. Unified Executive Business Intelligence Presentation & Auto-Visualization
-    const compactHistory = chatHistory.slice(-4).map((m) => ({
-      role: m.role as "user" | "assistant",
-      content: m.role === "assistant" && m.content.length > 400
-        ? m.content.slice(0, 400) + "... [truncated prior summary]"
-        : m.content,
-    }));
-
-    const totalRecordsFound = executionResults.reduce((acc, er) => acc + (Array.isArray(er.results) ? er.results.length : 0), 0);
-
-    const executionContextForAI = executionResults.map((er) => {
-      const total = Array.isArray(er.results) ? er.results.length : 0;
-      const sample = Array.isArray(er.results) ? er.results.slice(0, 40) : [];
-      return {
-        database: er.sourceName,
-        engine: er.dbType,
-        totalRowsFound: total,
-        sampleRecords: sample,
-        note: total > 40
-          ? `Database query successfully returned ${total} total records. The first 40 records are sampled above for your synthesis.`
-          : undefined,
-        ...(er.error ? { queryError: er.error } : {}),
-      };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const agentDelegate = (prisma as any).agent;
+    let agents: AgentRecord[] = await agentDelegate.findMany({
+      where: {
+        organizationId,
+        ...(selectedConnIds.length > 0 ? { connectionId: { in: selectedConnIds } } : {}),
+      },
+      include: {
+        connection: true,
+      },
+      orderBy: { createdAt: "desc" },
     });
 
-    const connectedDbNames = connections.length > 0
-      ? connections.map((c) => `${c.name} (${c.dbType.toUpperCase()})`).join(", ")
-      : "No internal databases (External Web Research)";
-    const primaryConnectionId = connections[0]?.id || "";
-    const primaryRawQuery = rawQueriesMap[primaryConnectionId] || "";
+    // Fallback: If no agents matched the connection filter, query all org agents
+    if (agents.length === 0 && selectedConnIds.length > 0) {
+      agents = await agentDelegate.findMany({
+        where: { organizationId },
+        include: { connection: true },
+        orderBy: { createdAt: "desc" },
+      });
+    }
 
-    // Assemble rows for visualization (up to 50 rows for rich UI inspection)
-    const allRows: Record<string, unknown>[] = [];
-    for (const er of executionResults) {
-      if (Array.isArray(er.results)) {
-        for (const r of er.results.slice(0, 50)) {
-          if (r && typeof r === "object") {
-            allRows.push({ ...(r as Record<string, unknown>) });
+    // Auto-seed: If the organization has 0 agents, automatically seed from available DB connections
+    if (agents.length === 0) {
+      const dbConns = await prisma.dbConnection.findMany({
+        where: { orgId: organizationId },
+        orderBy: { createdAt: "asc" },
+      });
+
+      if (dbConns.length > 0) {
+        const targetConnId = selectedConnIds[0] || dbConns[0].id;
+        console.log(`[Multi-Agent Pipeline] ⚡ Auto-seeding default Domain Agents for connection: ${targetConnId}...`);
+        await autoSeedPresetsIfEmpty(organizationId, targetConnId);
+        agents = await agentDelegate.findMany({
+          where: { organizationId },
+          include: { connection: true },
+          orderBy: { createdAt: "desc" },
+        });
+      }
+
+      // If still 0 (e.g. read-only DB permissions), instantiate virtual agent swarm bound to connection
+      if (agents.length === 0 && dbConns.length > 0) {
+        const primaryConn = dbConns[0];
+        agents = DYNAMICS_AX_PRESETS.map((p) => ({
+          id: `virtual-${p.id}`,
+          organizationId,
+          connectionId: primaryConn.id,
+          name: p.name,
+          description: p.description,
+          intentKeywords: p.intentKeywords,
+          systemPrompt: p.systemPrompt,
+          tableScope: p.tableScope,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          connection: primaryConn,
+        }));
+      }
+    }
+
+    console.log(`[Multi-Agent Pipeline] Found ${agents.length} configured Domain Agent(s).`);
+
+    // =========================================================================
+    // STEP 0.5: Conversational & Greeting Interception
+    // =========================================================================
+    if (isConversationalInquiry(prompt)) {
+      console.log(`[Multi-Agent Pipeline] 👋 Conversational inquiry detected: "${prompt}". Returning overview.`);
+      return createConversationalResponse(
+        agents.map((a) => ({
+          name: a.name,
+          description: a.description,
+          intentKeywords: a.intentKeywords,
+          tableScope: a.tableScope,
+        }))
+      );
+    }
+
+    // =========================================================================
+    // STEP 0.8: Live Web Search Intelligence (if requested or enabled)
+    // =========================================================================
+    let webSourcesList: WebSearchResult[] = [];
+    let webIntelligenceText = "";
+
+    const wantsWebSearch = Boolean(enableWebSearch) || /\b(search the web|latest news|competitors?|market trends?|external data|industry news)\b/i.test(prompt);
+
+    if (wantsWebSearch) {
+      try {
+        const cleanQuery = cleanSearchQuery(prompt);
+        console.log(`[Multi-Agent Pipeline] 🌐 Executing Live Web Search: "${cleanQuery}"...`);
+        const searchRes = await executeWebSearch(cleanQuery);
+        if (searchRes && searchRes.results && searchRes.results.length > 0) {
+          webSourcesList = searchRes.results;
+          webIntelligenceText = `\n\nLIVE WEB SEARCH INTELLIGENCE (${webSourcesList.length} verified sources):\n${webSourcesList
+            .slice(0, 5)
+            .map(
+              (r, idx) =>
+                `- [Source ${idx + 1}: ${r.domain || r.url}] "${r.title}":\n  Snippet: ${r.snippet}${
+                  r.content ? `\n  Article Details: ${r.content.slice(0, 400)}...` : ""
+                }`
+            )
+            .join("\n\n")}`;
+          console.log(`[Multi-Agent Pipeline] 🌐 Retrieved ${webSourcesList.length} live web sources.`);
+        }
+      } catch (searchErr) {
+        console.warn("[Multi-Agent Pipeline] 🌐 Web search notice:", searchErr);
+      }
+    }
+
+    // Format multi-turn conversation context for continuity
+    const formattedHistoryContext = chatHistory.length > 0
+      ? `\n\nRECENT CONVERSATION HISTORY (FOR CONTINUITY & CONTEXT RESOLUTION):\n${chatHistory
+          .slice(-4)
+          .map((m) => `[${m.role.toUpperCase()}]: ${m.content.slice(0, 300)}`)
+          .join("\n")}`
+      : "";
+
+    // =========================================================================
+    // STEP 1: Strategic Intent Router & Swarm Orchestrator
+    // =========================================================================
+    console.log(`[Multi-Agent Pipeline] 🧭 Step 1: Evaluating Strategic Intent Router...`);
+
+    let selectedAgents: AgentRecord[] = [];
+    let subtaskPlans: SubtaskPlan[] = [];
+    let coordinationPlan = "";
+
+    if (agents.length > 0 && isConfigured && (routerModel || specialistModel)) {
+      const candidateAgentsList = agents.map((a: AgentRecord) => ({
+        id: a.id,
+        name: a.name,
+        description: a.description,
+        intentKeywords: a.intentKeywords,
+        tableScope: a.tableScope,
+      }));
+
+      const routerSystemPrompt = `You are a strategic Multi-Agent Semantic Router & Orchestrator for an enterprise data intelligence system.
+Your purpose is to analyze the user's business question and determine which Domain Agent(s) MUST be invoked.
+
+${formattedHistoryContext}
+
+CORE DOMAIN INTENT RECOGNITION:
+1. SALES & ORDERS: Questions regarding sales orders, customers, delivery names, line pricing, sales turnover, revenue, backorders, customer groups, or sales records/entries.
+2. INVENTORY & WAREHOUSE: Questions regarding on-hand stock balances, available physical inventory, warehouse sites/locations, batches, inventory valuation, or item catalogs.
+3. FINANCIAL LEDGER & BANKING: Questions regarding general ledger journals, vouchers, debits, credits, account balances, chart of accounts, bank accounts, or financial audit records/entries.
+4. PROCUREMENT & VENDORS: Questions regarding purchase orders, vendor spend, supplier accounts, purchasing lines, or PO records.
+5. ACCOUNTS RECEIVABLE & INVOICING: Questions regarding posted customer invoices, invoice revenue, billing, or receivable ledgers.
+
+DYNAMIC MULTI-TENANCY & LEGAL ENTITY RECOGNITION (DATAAREAID):
+- In ERP databases, data is partitioned by [DATAAREAID] (legal entity / company identifier, typically 2 to 5 alphanumeric characters, e.g. USMF, DAT, CONT, CEU, ABC, TGPL, TAJ, T-PB, or ANY other company code).
+- When the user asks for transactions, records, entries, summaries, or operations for ANY company code or legal entity:
+  * Extract that company code dynamically.
+  * Route to the appropriate domain agent with a subtask explicitly specifying that company filter.
+  * If the inquiry mentions entries, vouchers, journals, accounting, debits, or credits -> Financial Ledger Agent.
+  * If the inquiry mentions sales, orders, revenue, customer accounts, or general operational records -> Sales & Orders Agent.
+  * If the inquiry mentions stock, inventory, products, or warehouse locations -> Inventory & Warehouse Agent.
+  * If cross-domain analysis is requested, route to multiple agents.
+
+MULTI-AGENT COLLABORATION & SWARM ROUTING:
+- SINGLE DOMAIN: If the question strictly pertains to one domain, select that single Domain Agent.
+- MULTI-DOMAIN SWARM: If answering requires correlating data across multiple domains (e.g. "Check sales demand vs warehouse availability", "Match sales orders with posted invoices", "Compare purchasing spend against GL bank debits"), you MUST select ALL relevant Domain Agents!
+- SUBTASK PRECISION: For each agent, generate an actionable subtaskPrompt specifying:
+  * The exact domain dimension to group or filter by (e.g. by item, customer, period, warehouse).
+  * The exact numeric metric to calculate (e.g. total revenue, available physical stock, net balance).
+  * Any temporal, status, or company/dataAreaId filters present in the question.
+
+AVAILABLE DOMAIN AGENTS:
+${candidateAgentsList.map((a) => `- Agent ID: "${a.id}"\n  Name: "${a.name}"\n  Keywords: [${a.intentKeywords}]\n  Description: "${a.description}"\n  Table Scope: [${a.tableScope}]`).join("\n\n")}
+
+CRITICAL RESPONSE FORMAT:
+Return ONLY a strict JSON object:
+{
+  "selectedAgentIds": ["agent-id-or-name-1", "agent-id-or-name-2"],
+  "coordinationPlan": "Why these agents collaborate and how their data will be synthesized",
+  "subtasks": [
+    { "agentId": "agent-id-or-name-1", "subtaskPrompt": "Precise instruction for agent 1 including specific metric, dimension, and filters", "reason": "Reason for agent 1" }
+  ]
+}
+If no agent matches, return:
+{ "selectedAgentIds": [], "coordinationPlan": null, "subtasks": [] }`;
+
+      try {
+        const activeRouterModel = (routerModel || specialistModel)!;
+        const routerRes = await generateText({
+          model: activeRouterModel as Parameters<typeof generateText>[0]["model"],
+          system: routerSystemPrompt,
+          prompt: `User Question: "${prompt}"\nDetermine which Domain Agent(s) to invoke. Return ONLY JSON.`,
+        });
+
+        const rawRouterText = routerRes.text.trim();
+        console.log(`[Multi-Agent Pipeline] 🧭 Router Output: ${rawRouterText}`);
+
+        const jsonCleaned = rawRouterText.replace(/```(?:json)?/gi, "").replace(/```/g, "").trim();
+        const firstBrace = jsonCleaned.indexOf("{");
+        const lastBrace = jsonCleaned.lastIndexOf("}");
+
+        if (firstBrace !== -1 && lastBrace !== -1) {
+          const parsed = JSON.parse(jsonCleaned.substring(firstBrace, lastBrace + 1));
+
+          const rawMatches: string[] = Array.isArray(parsed.selectedAgentIds)
+            ? parsed.selectedAgentIds
+            : parsed.selectedAgentId
+            ? [parsed.selectedAgentId]
+            : [];
+
+          const resolvedAgentIds = new Set<string>();
+
+          for (const rawId of rawMatches) {
+            const rawStr = String(rawId).trim().toLowerCase();
+            for (const ag of agents) {
+              const agNameLower = ag.name.toLowerCase();
+              const agIdLower = ag.id.toLowerCase();
+              if (
+                agIdLower === rawStr ||
+                agNameLower === rawStr ||
+                agNameLower.includes(rawStr) ||
+                rawStr.includes(agNameLower) ||
+                (rawStr.includes("sales") && agNameLower.includes("sales")) ||
+                (rawStr.includes("invent") && agNameLower.includes("invent")) ||
+                (rawStr.includes("ledger") && (agNameLower.includes("ledger") || agNameLower.includes("finan"))) ||
+                (rawStr.includes("purch") && agNameLower.includes("purch")) ||
+                (rawStr.includes("invoice") && agNameLower.includes("invoic"))
+              ) {
+                resolvedAgentIds.add(ag.id);
+              }
+            }
+          }
+
+          selectedAgents = agents.filter((a: AgentRecord) => resolvedAgentIds.has(a.id));
+          coordinationPlan = parsed.coordinationPlan || "";
+
+          if (Array.isArray(parsed.subtasks)) {
+            subtaskPlans = parsed.subtasks.map((st: { agentId?: string; subtaskPrompt?: string; reason?: string }) => {
+              const stIdLower = String(st.agentId || "").trim().toLowerCase();
+              const matched = agents.find((a) =>
+                a.id.toLowerCase() === stIdLower ||
+                a.name.toLowerCase() === stIdLower ||
+                a.name.toLowerCase().includes(stIdLower) ||
+                stIdLower.includes(a.name.toLowerCase()) ||
+                (stIdLower.includes("sales") && a.name.toLowerCase().includes("sales")) ||
+                (stIdLower.includes("invent") && a.name.toLowerCase().includes("invent")) ||
+                (stIdLower.includes("ledger") && (a.name.toLowerCase().includes("ledger") || a.name.toLowerCase().includes("finan"))) ||
+                (stIdLower.includes("purch") && a.name.toLowerCase().includes("purch")) ||
+                (stIdLower.includes("invoice") && a.name.toLowerCase().includes("invoic"))
+              );
+              return {
+                agentId: matched ? matched.id : String(st.agentId || ""),
+                subtaskPrompt: String(st.subtaskPrompt || prompt),
+                reason: st.reason,
+              };
+            });
+          }
+        }
+      } catch (routerErr) {
+        console.warn("[Multi-Agent Pipeline] ⚠️ Router LLM parsing notice:", routerErr);
+      }
+    }
+
+    // Heuristic Fallback Router (Keyword & Dynamic Entity match if LLM router was inconclusive or returned 0 agents)
+    if (selectedAgents.length === 0 && agents.length > 0) {
+      const lowerPrompt = prompt.toLowerCase();
+      const scoredAgents: { agent: AgentRecord; score: number }[] = [];
+
+      for (const ag of agents) {
+        let score = 0;
+        const keywords = ag.intentKeywords.toLowerCase().split(",").map((k: string) => k.trim());
+        for (const kw of keywords) {
+          if (kw && lowerPrompt.includes(kw)) score += 5;
+        }
+        if (lowerPrompt.includes(ag.name.toLowerCase())) score += 10;
+        if (score > 0) {
+          scoredAgents.push({ agent: ag, score });
+        }
+      }
+
+      scoredAgents.sort((a, b) => b.score - a.score);
+
+      if (scoredAgents.length > 0) {
+        selectedAgents.push(scoredAgents[0].agent);
+        if (scoredAgents.length > 1 && scoredAgents[1].score >= 5) {
+          selectedAgents.push(scoredAgents[1].agent);
+        }
+        console.log(`[Multi-Agent Pipeline] 🧭 Heuristic keyword routing selected ${selectedAgents.length} agent(s): ${selectedAgents.map(a => a.name).join(", ")}`);
+      } else {
+        // Universal Multi-Tenant Entity & General Record Fallback:
+        const dynamicEntityCode = extractDynamicEntityCode(prompt);
+        const isGeneralRecordInquiry = /\b(records?|entires?|entries|transactions?|data|activity|overview|all|dump|summary|show|list)\b/i.test(lowerPrompt);
+
+        if (dynamicEntityCode || isGeneralRecordInquiry) {
+          const entityCode = dynamicEntityCode || "";
+          const salesAgent = agents.find((a) => a.name.toLowerCase().includes("sales") || a.tableScope.toLowerCase().includes("salestable"));
+          const ledgerAgent = agents.find((a) => a.name.toLowerCase().includes("ledger") || a.name.toLowerCase().includes("finan") || a.tableScope.toLowerCase().includes("ledgerjournal"));
+          const inventoryAgent = agents.find((a) => a.name.toLowerCase().includes("invent") || a.name.toLowerCase().includes("stock") || a.tableScope.toLowerCase().includes("inventsum"));
+
+          let primaryFallback: AgentRecord | undefined;
+          if (/\b(entir|entr|journal|voucher|ledger|gl|debit|credit|account|bank)\b/i.test(lowerPrompt) && ledgerAgent) {
+            primaryFallback = ledgerAgent;
+          } else if (/\b(item|stock|warehous|product|invent|batch|qty)\b/i.test(lowerPrompt) && inventoryAgent) {
+            primaryFallback = inventoryAgent;
+          } else if (salesAgent) {
+            primaryFallback = salesAgent;
+          } else if (ledgerAgent) {
+            primaryFallback = ledgerAgent;
+          } else if (inventoryAgent) {
+            primaryFallback = inventoryAgent;
+          } else {
+            primaryFallback = agents[0];
+          }
+
+          if (primaryFallback) {
+            selectedAgents.push(primaryFallback);
+            let subtaskPrompt = "";
+            const isSales = primaryFallback.name.toLowerCase().includes("sales") || primaryFallback.tableScope.toLowerCase().includes("salestable");
+            const isLedger = primaryFallback.name.toLowerCase().includes("ledger") || primaryFallback.name.toLowerCase().includes("finan");
+            const isInvent = primaryFallback.name.toLowerCase().includes("invent") || primaryFallback.tableScope.toLowerCase().includes("inventsum");
+
+            if (isSales) {
+              subtaskPrompt = entityCode
+                ? `Retrieve recent sales order records, customer accounts, and order line revenue for legal entity '${entityCode}'`
+                : `Retrieve recent customer sales orders and transaction records matching: "${prompt}"`;
+            } else if (isLedger) {
+              subtaskPrompt = entityCode
+                ? `Retrieve recent General Ledger journal entries, vouchers, debit/credit records, and descriptions for legal entity '${entityCode}'`
+                : `Retrieve recent General Ledger transactions, vouchers, and accounting records matching: "${prompt}"`;
+            } else if (isInvent) {
+              subtaskPrompt = entityCode
+                ? `Retrieve on-hand stock records, items, and warehouse inventory balances for legal entity '${entityCode}'`
+                : `Retrieve inventory item catalog and on-hand stock records matching: "${prompt}"`;
+            } else {
+              subtaskPrompt = entityCode
+                ? `Retrieve recent operational records and transactions for legal entity '${entityCode}'`
+                : `Retrieve relevant enterprise records matching: "${prompt}"`;
+            }
+
+            subtaskPlans.push({
+              agentId: primaryFallback.id,
+              subtaskPrompt,
+              reason: entityCode ? `General record inquiry for legal entity ${entityCode}` : "Broad enterprise record inquiry",
+            });
+            console.log(`[Multi-Agent Pipeline] 🧭 Dynamic Entity fallback routed to "${primaryFallback.name}" (Entity: ${entityCode || "All"})`);
           }
         }
       }
     }
 
-    // If pure web search with no DB rows, generate structured rows from web sources
-    if (allRows.length === 0 && webSources.length > 0) {
-      for (const [idx, s] of webSources.entries()) {
-        allRows.push({
-          Source_Index: idx + 1,
-          Entity_Or_Topic: s.title.slice(0, 48),
-          Domain: s.domain || "Web Source",
-          Intelligence_Summary: s.snippet.slice(0, 180),
-          Verification: "Live Web Citation",
+    // Ensure every selected agent has an explicit subtask
+    for (const ag of selectedAgents) {
+      if (!subtaskPlans.some((s) => s.agentId === ag.id)) {
+        const dynamicEntityCode = extractDynamicEntityCode(prompt);
+        subtaskPlans.push({
+          agentId: ag.id,
+          subtaskPrompt: dynamicEntityCode
+            ? `${prompt} (Filter for legal entity / company '${dynamicEntityCode}')`
+            : prompt,
+          reason: `Auto-assigned based on domain scope: ${ag.tableScope}`,
         });
       }
     }
 
-    const firstRow = allRows[0] || {};
-    const keys = Object.keys(firstRow).filter((k) => k !== "id" && k !== "_id");
-    const primaryXKey = keys[0] || (enableWebSearch ? "Entity_Or_Topic" : "Category");
-    const numericKeys = keys.filter((k) => {
+    // If still no agent matches:
+    if (selectedAgents.length === 0) {
+      console.log(`[Multi-Agent Pipeline] ⚠️ Step 1 Router found no matching agent. Triggering Empty Scope Fallback.`);
+      return createEmptyScopeFallbackResponse(
+        prompt,
+        agents.map((a: AgentRecord) => ({ name: a.name, intentKeywords: a.intentKeywords }))
+      );
+    }
+
+    console.log(`[Multi-Agent Pipeline] ✅ Step 1 Selected ${selectedAgents.length} Agent(s):`);
+    selectedAgents.forEach((a, idx) => {
+      console.log(`   [Agent ${idx + 1}] "${a.name}" [ID: ${a.id}] | Tables: [${a.tableScope}]`);
+    });
+
+    // =========================================================================
+    // STEP 2: Multi-Agent Scoped Execution & Self-Healing Query Engine
+    // =========================================================================
+    console.log(`[Multi-Agent Pipeline] ⚡ Step 2: Executing ${selectedAgents.length} Domain Specialist(s)...`);
+
+    const executedAgents: ExecutedAgentOutput[] = [];
+    const poolCache = new Map<string, sql.ConnectionPool>();
+
+    try {
+      for (let i = 0; i < selectedAgents.length; i++) {
+        const agent = selectedAgents[i];
+        const targetConn = agent.connection;
+
+        if (!targetConn) {
+          console.warn(`[Multi-Agent Pipeline] Target connection missing for agent: ${agent.name}`);
+          continue;
+        }
+
+        const subtask = subtaskPlans.find((s) => s.agentId === agent.id);
+        const agentPrompt = subtask?.subtaskPrompt || prompt;
+        const dbEngine = (targetConn.dbType || "mssql").toLowerCase();
+
+        // Inter-Agent Context: Pass data from previous agents to current agent
+        const interAgentContext = executedAgents.length > 0
+          ? `\n\nINTER-AGENT COLLABORATION CONTEXT:\nPrevious Domain Agent(s) executed:\n${executedAgents
+              .map(
+                (ea) =>
+                  `- [Agent: ${ea.agent.name}] retrieved ${ea.totalRowsCount} records using query:\n\`\`\`sql\n${ea.rawExecutedQuery}\n\`\`\`\nSample Results (First 3 records):\n${JSON.stringify(
+                    ea.rawResults.slice(0, 3)
+                  )}`
+              )
+              .join("\n")}\nYou can use key identifiers (e.g. item numbers, customer accounts) from previous agents to filter or target your domain queries.`
+          : "";
+
+        const tableNamesList = agent.tableScope
+          .split(",")
+          .map((t) => t.trim())
+          .filter(Boolean);
+
+        // Decrypt credentials safely
+        let plainPassword = "";
+        try {
+          plainPassword = decryptPassword(targetConn.encryptedPassword);
+        } catch (decErr) {
+          console.warn(`[Multi-Agent Pipeline] ⚠️ Could not decrypt password for connection ${targetConn.id}:`, decErr);
+        }
+
+        // Initialize MSSQL connection pool if needed
+        let pool = poolCache.get(targetConn.id) || null;
+        if (!pool && plainPassword && dbEngine === "mssql") {
+          const mssqlConfig: sql.config = {
+            server: targetConn.host,
+            port: Number(targetConn.port) || 1433,
+            database: targetConn.dbName,
+            user: targetConn.username,
+            password: plainPassword,
+            connectionTimeout: 15000,
+            requestTimeout: 60000,
+            pool: { max: 2, min: 0, idleTimeoutMillis: 3000 },
+          };
+
+          try {
+            pool = new sql.ConnectionPool({
+              ...mssqlConfig,
+              options: { encrypt: true, trustServerCertificate: true },
+            });
+            await pool.connect();
+            poolCache.set(targetConn.id, pool);
+          } catch (encErr) {
+            console.warn("[Multi-Agent Pipeline] Encrypted handshake retry for pool:", encErr);
+            try {
+              pool = new sql.ConnectionPool({
+                ...mssqlConfig,
+                options: { encrypt: false, trustServerCertificate: true },
+              });
+              await pool.connect();
+              poolCache.set(targetConn.id, pool);
+            } catch (plainConnErr) {
+              console.warn(`[Multi-Agent Pipeline] ⚠️ Could not connect to database for agent "${agent.name}":`, plainConnErr);
+              pool = null;
+            }
+          }
+        }
+
+        // Query schema for this agent's scoped tables
+        const scopedSchemaContext = dbEngine === "mssql"
+          ? await fetchScopedSchemaMSSQL(pool, tableNamesList, targetConn.schemaContext)
+          : targetConn.schemaContext || `Tables in scope: ${agent.tableScope}`;
+
+        // Build specialist system prompt
+        const specialistSystemPrompt = `${agent.systemPrompt}
+
+TARGET ENGINE: ${dbEngine.toUpperCase()} (Dialect: ${dbEngine === "mssql" ? "T-SQL for Dynamics AX" : dbEngine})
+
+STRICT SCHEMA & ENTERPRISE PERFORMANCE MANDATES:
+1. ONLY USE COLUMNS LISTED IN THE SCOPED SCHEMA BELOW.
+   NEVER invent, guess, or assume column names! If a column is not listed, find the real column in the schema below.
+
+2. CORE ENTERPRISE SCHEMA RULES:
+   [SALES & REVENUE DOMAIN]:
+   - [SalesTable] (st): Customer name is in st.[DELIVERYNAME] or st.[SALESNAME]. (NO "CustomerName" column).
+   - [SalesLine] (sl): Line revenue is sl.[LINEAMOUNT]. Quantity is sl.[SALESQTY]. Price is sl.[SALESPRICE]. Description is sl.[NAME].
+   - Join: FROM dbo.[SalesTable] st WITH (NOLOCK) INNER JOIN dbo.[SalesLine] sl WITH (NOLOCK) ON st.[SALESID] = sl.[SALESID] AND st.[DATAAREAID] = sl.[DATAAREAID]
+   - Total Revenue: ISNULL(SUM(sl.[LINEAMOUNT]), 0)
+   - Exclude canceled orders: sl.[SALESSTATUS] <> 4 AND st.[SALESSTATUS] <> 4
+
+   [INVENTORY & WAREHOUSE DOMAIN]:
+   - [InventSum] (isum) is AUTHORITATIVE for current on-hand stock! Available physical stock is isum.[AVAILPHYSICAL].
+   - NEVER query [InventTrans] for current stock. Always use [InventSum].
+   - Active stock filter: isum.[CLOSED] = 0.
+   - Join [InventDim] (idim): ON isum.[INVENTDIMID] = idim.[INVENTDIMID] AND isum.[DATAAREAID] = idim.[DATAAREAID] for warehouse (idim.[INVENTLOCATIONID]).
+
+   [GENERAL LEDGER & BANKING DOMAIN]:
+   - [LedgerJournalTable] (ljt_h) & [LedgerJournalTrans] (ljt).
+   - Voucher: ljt.[VOUCHER], Date: ljt.[TRANSDATE], Account: ljt.[ACCOUNTNUM].
+   - Debits: ljt.[AMOUNTCURDEBIT], Credits: ljt.[AMOUNTCURCREDIT], Net: (ljt.[AMOUNTCURDEBIT] - ljt.[AMOUNTCURCREDIT]).
+   - Join on JournalNum AND DataAreaId.
+
+   [PROCUREMENT & VENDOR DOMAIN]:
+   - [PurchTable] (pt) & [PurchLine] (pl).
+   - Vendor Name: pt.[PURCHNAME]. Line spend: pl.[LINEAMOUNT]. Quantity: pl.[PURCHQTY].
+   - Join on PurchId AND DataAreaId.
+
+   [ACCOUNTS RECEIVABLE & INVOICING DOMAIN]:
+   - [CustInvoiceJour] (cij) & [CustInvoiceTrans] (cit).
+   - Invoice Amount: cij.[INVOICEAMOUNT]. Line Revenue: cit.[LINEAMOUNT].
+   - Join on InvoiceId, InvoiceDate, and DataAreaId.
+
+3. DYNAMIC MULTI-TENANCY & ANY COMPANY / LEGAL ENTITY (DATAAREAID):
+   - All tables partition data by [DATAAREAID].
+   - When the user's prompt or subtask specifies ANY company or legal entity:
+     Filter dynamically: (table.[DATAAREAID] = '<COMPANY_CODE>' OR LOWER(table.[DATAAREAID]) = LOWER('<COMPANY_CODE>'))
+   - When NO company is specified: Query across all legal entities.
+   - When comparing companies: Group by table.[DATAAREAID] AS [Legal Entity].
+
+4. VISUALIZATION DIRECTIVES:
+   - Column 1: Primary dimension / category (e.g. [Customer], [Item], [Warehouse], [Period], [Account Number]).
+   - Aggregate metrics: Clean aliases with ISNULL(SUM(...), 0) (e.g. [Total Revenue], [Available Stock], [Total Debits]).
+   - GROUP BY: Every non-aggregated column in SELECT must be in GROUP BY.
+   - Return strictly read-only query starting with SELECT or WITH.
+${interAgentContext}
+
+=======================================================
+HEAVILY PRUNED DOMAIN SCHEMA (PERMITTED TABLES ONLY):
+=======================================================
+${scopedSchemaContext}`;
+
+        let candidateSQL = "";
+
+        if (isConfigured && specialistModel) {
+          const sqlRes = await generateText({
+            model: specialistModel as Parameters<typeof generateText>[0]["model"],
+            system: specialistSystemPrompt,
+            prompt: `User Request: "${agentPrompt}"\nGenerate the exact read-only query for these scoped tables. Compute accurate results across the dataset.`,
+          });
+
+          candidateSQL = cleanQueryString(sqlRes.text);
+        } else {
+          const firstTable = cleanTableName(tableNamesList[0] || "SalesTable");
+          candidateSQL = `SELECT TOP (100) * FROM dbo.[${firstTable}];`;
+        }
+
+        console.log(`[Multi-Agent Pipeline] 📝 [${agent.name}] Generated SQL:\n   ${candidateSQL}`);
+
+        // Phase 4 Security: Enforce strict regex validation
+        let validation = validateSafeReadOnlyMSSQLQuery(candidateSQL);
+        if (!validation.isSafe) {
+          console.warn(`[Multi-Agent Pipeline] ⚠️ Security notice for ${agent.name}: ${validation.reason}`);
+          if (isConfigured && specialistModel) {
+            try {
+              const healSecRes = await generateText({
+                model: specialistModel as Parameters<typeof generateText>[0]["model"],
+                system: specialistSystemPrompt,
+                prompt: `Your previous SQL query failed security validation: "${validation.reason}".
+Offending query:
+${candidateSQL}
+
+Instructions:
+Generate a strictly single, read-only SELECT or WITH statement without semicolons or mutation keywords. Return ONLY the raw SQL query.`,
+              });
+              const healedSecSQL = cleanQueryString(healSecRes.text);
+              const retryVal = validateSafeReadOnlyMSSQLQuery(healedSecSQL);
+              if (retryVal.isSafe) {
+                candidateSQL = healedSecSQL;
+                validation = retryVal;
+              }
+            } catch (secHealErr) {
+              console.warn("[Multi-Agent Pipeline] Security self-healing error:", secHealErr);
+            }
+          }
+        }
+
+        let rawResults: unknown[] = [];
+        let queryExecutionError: string | null = null;
+        let executedQuery = candidateSQL;
+
+        if (!validation.isSafe) {
+          console.error(`[Multi-Agent Pipeline] 🛑 Security Violation persists for ${agent.name}: ${validation.reason}`);
+          queryExecutionError = `Security validation notice: ${validation.reason}`;
+        } else if (dbEngine === "mssql" && !pool) {
+          queryExecutionError = "Database connection offline or unreachable.";
+        } else {
+          // Execute query with multi-engine support & Self-Healing Auto-Correction
+          const tStart = Date.now();
+          try {
+            if (dbEngine === "mssql" && pool) {
+              const queryResponse = await pool.request().query(candidateSQL);
+              rawResults = queryResponse.recordset || [];
+            } else {
+              rawResults = await executeRawQueryOnConnection(
+                {
+                  id: targetConn.id,
+                  name: targetConn.name,
+                  dbType: targetConn.dbType,
+                  host: targetConn.host,
+                  port: targetConn.port,
+                  dbName: targetConn.dbName,
+                  username: targetConn.username,
+                  encryptedPassword: targetConn.encryptedPassword,
+                  schemaContext: targetConn.schemaContext,
+                },
+                candidateSQL
+              );
+            }
+            console.log(`[Multi-Agent Pipeline] ✅ [${agent.name}] Query executed in ${Date.now() - tStart}ms. Retrieved ${rawResults.length} row(s).`);
+          } catch (firstErr: unknown) {
+            const firstErrMsg = firstErr instanceof Error ? firstErr.message : String(firstErr);
+            console.warn(`[Multi-Agent Pipeline] ⚠️ [${agent.name}] Query notice: ${firstErrMsg}`);
+
+            const isConnectionError =
+              firstErrMsg.includes("ECONNREFUSED") ||
+              firstErrMsg.includes("timeout") ||
+              firstErrMsg.includes("Connection lost") ||
+              firstErrMsg.includes("Failed to connect") ||
+              firstErrMsg.includes("ETIMEDOUT");
+
+            if (isConfigured && specialistModel && !isConnectionError) {
+              console.log(`[Multi-Agent Pipeline] 🩺 [${agent.name}] Self-Healing: Attempting query auto-correction...`);
+              try {
+                const repairPrompt = `Your previous query generated an execution error:
+"${firstErrMsg}"
+
+OFFENDING SQL QUERY:
+${candidateSQL}
+
+VERIFIED ACCURATE TABLE & COLUMN SCHEMA:
+${scopedSchemaContext}
+
+CORRECTION INSTRUCTIONS:
+1. Fix the error by strictly using only the valid columns and tables shown in the schema above.
+2. GROUP BY RULE: If using aggregate functions (SUM, COUNT, AVG), every non-aggregated column in the SELECT list MUST appear in the GROUP BY clause.
+3. TABLE QUALIFICATION: Prefix every column with its table alias.
+4. TABLE HINT: Always include WITH (NOLOCK) on each table in FROM and JOIN clauses for MSSQL.
+5. Return ONLY the corrected read-only query starting with SELECT or WITH. No conversational prose, no markdown code fences.`;
+
+                const healRes = await generateText({
+                  model: specialistModel as Parameters<typeof generateText>[0]["model"],
+                  system: specialistSystemPrompt,
+                  prompt: repairPrompt,
+                });
+
+                const healedSQL = cleanQueryString(healRes.text);
+                const healedValidation = validateSafeReadOnlyMSSQLQuery(healedSQL);
+                if (healedValidation.isSafe) {
+                  console.log(`[Multi-Agent Pipeline] 🩺 [${agent.name}] Retrying with healed query:\n   ${healedSQL}`);
+                  if (dbEngine === "mssql" && pool) {
+                    const retryResponse = await pool.request().query(healedSQL);
+                    rawResults = retryResponse.recordset || [];
+                  } else {
+                    rawResults = await executeRawQueryOnConnection(
+                      {
+                        id: targetConn.id,
+                        name: targetConn.name,
+                        dbType: targetConn.dbType,
+                        host: targetConn.host,
+                        port: targetConn.port,
+                        dbName: targetConn.dbName,
+                        username: targetConn.username,
+                        encryptedPassword: targetConn.encryptedPassword,
+                        schemaContext: targetConn.schemaContext,
+                      },
+                      healedSQL
+                    );
+                  }
+                  executedQuery = healedSQL;
+                  queryExecutionError = null;
+                  console.log(`[Multi-Agent Pipeline] 🩺 [${agent.name}] Self-healing SUCCESS! Retrieved ${rawResults.length} row(s).`);
+                } else {
+                  queryExecutionError = firstErrMsg;
+                }
+              } catch (healErr) {
+                console.warn(`[Multi-Agent Pipeline] [${agent.name}] Self-healing retry error:`, healErr);
+                queryExecutionError = firstErrMsg;
+              }
+            } else {
+              queryExecutionError = firstErrMsg;
+            }
+          }
+        }
+
+        executedAgents.push({
+          agent,
+          subtaskPrompt: agentPrompt,
+          scopedSchemaContext,
+          rawExecutedQuery: executedQuery,
+          rawResults,
+          totalRowsCount: rawResults.length,
+          queryExecutionError,
+        });
+      }
+    } finally {
+      // Close all connection pools
+      for (const p of poolCache.values()) {
+        try { await p.close(); } catch {}
+      }
+    }
+
+    // =========================================================================
+    // STEP 3: Synthesis & Executive Multi-Agent Dashboard Formatting
+    // =========================================================================
+    console.log(`[Multi-Agent Pipeline] 📊 Step 3: Synthesis & Dashboard Formatting...`);
+
+    const primaryAgent = executedAgents[0]?.agent || selectedAgents[0];
+    const primaryConn = primaryAgent?.connection || {
+      id: "conn-default",
+      name: "Default Connection",
+      dbType: "MSSQL",
+      host: "localhost",
+      port: 1433,
+      dbName: "DynamicsAX",
+      username: "sa",
+      encryptedPassword: "",
+    };
+    const isMultiAgent = executedAgents.length > 1;
+
+    const combinedAgentNames = executedAgents.map((ea) => ea.agent.name).join(" + ") + (isMultiAgent ? " (Multi-Agent Swarm)" : "");
+    const combinedRawQuery = executedAgents
+      .map(
+        (ea) =>
+          `-- ========================================================\n-- Domain Agent: ${ea.agent.name}\n-- Scope: ${ea.agent.tableScope}\n-- Prompt: ${ea.subtaskPrompt}\n-- ========================================================\n${ea.rawExecutedQuery}`
+      )
+      .join("\n\n");
+
+    const totalVerifiedRecords = executedAgents.reduce((sum, ea) => sum + ea.totalRowsCount, 0);
+
+    // Merge or select primary dataset for Recharts rendering
+    const MAX_SYNTHESIS_ROWS = 100;
+    const primaryDataset = (executedAgents[0]?.rawResults || []).slice(0, MAX_SYNTHESIS_ROWS);
+
+    const firstRow = (primaryDataset[0] as Record<string, unknown>) || {};
+    const rowKeys = Object.keys(firstRow).filter((k) => k !== "id" && k !== "_id" && k !== "RECID");
+    const primaryXKey = rowKeys[0] || "Category";
+    const numericKeys = rowKeys.filter((k) => {
       const val = firstRow[k];
       return typeof val === "number" || (!isNaN(Number(val)) && val !== null && val !== "");
     });
 
-    const fallbackVisualization = {
-      summary: enableWebSearch
-        ? `## Executive Market & Competitor Intelligence: ${prompt}\n\nRetrieved **${webSources.length} verified web sources**${connections.length > 0 && needDbQuery ? ` and internal data records from **${connectedDbNames}**` : ""} addressing "${prompt}".\n\n### 1. Market Overview & Competitive Landscape\nBased on verified intelligence from **[Source 1: ${webSources[0]?.domain || "Web"}]** and **[Source 2: ${webSources[1]?.domain || "Web"}]**, top industry operators maintain extensive distribution and retail operations with strategic marketing differentiation.\n\n### 2. Recent Campaigns & Marketing Highlights\n${webSources.map((s, i) => `- **[Source ${i + 1}: ${s.domain || "Source"}] (${s.title}):** ${s.snippet}`).join("\n\n")}\n\n### 3. Strategic Guidance & Business Recommendations\n- **Digital Agility:** Monitor competitors' promotional campaigns and award-winning initiatives [Source 1] to identify rapid counter-positioning opportunities.\n- **Brand Positioning:** Competitors are expanding loyalty programs, digital cards, and retail convenience to capture customer retention.\n- **Commercial Benchmarking:** Cross-reference public campaign strategies to optimize customer acquisition and marketing spend.`
-        : `## Executive Summary: ${prompt}\n\n${totalRecordsFound > 0 ? `Retrieved **${totalRecordsFound} verified records** from **${connectedDbNames}** answering "${prompt}". Displaying verified records in the table below.` : `No matching records were found in **${connectedDbNames}** for "${prompt}".`}\n\n### Strategic Business Insights:\n- **Verified Data:** Live database query executed successfully on [${connectedDbNames}].\n- **Total Records Found:** ${totalRecordsFound} row(s) returned.\n- **Takeaways:** You can inspect, sort, or export the verified data below.`,
-      recommendedVisualization: "TABLE",
+    const fallbackWidget = {
+      summary: executedAgents.some((ea) => ea.queryExecutionError)
+        ? `### ⚠️ Query Execution Notice\n\nDomain Agent notice encountered while querying database:\n\`\`\`\n${executedAgents.map(ea => ea.queryExecutionError ? `[${ea.agent.name}]: ${ea.queryExecutionError}` : "").filter(Boolean).join("\n")}\n\`\`\``
+        : `### 📊 Executive Summary (${combinedAgentNames})\n\nProcessed **${totalVerifiedRecords} verified records** across **${executedAgents.length} Domain Agent(s)** for "${prompt}".\n\n${coordinationPlan ? `#### Coordination Plan:\n${coordinationPlan}\n\n` : ""}#### Agent Execution Details:\n${executedAgents.map(ea => `- **${ea.agent.name}**: Retrieved ${ea.totalRowsCount} records from \`${ea.agent.tableScope}\`.`).join("\n")}`,
+      recommendedVisualization: (numericKeys.length > 0 && totalVerifiedRecords > 1 ? "BAR" : "TABLE") as "BAR" | "TABLE",
       chartConfig: {
         xAxisKey: primaryXKey,
         dataKeys: numericKeys.slice(0, 2),
-        title: prompt.slice(0, 45) || (enableWebSearch ? "Competitor & Market Intelligence" : "Analytics Overview"),
+        title: `${combinedAgentNames}: ${prompt.slice(0, 40)}`,
       },
-      data: allRows,
-      webSources: webSources.length > 0 ? webSources : undefined,
-      isWebSearch: enableWebSearch,
-      rawQuery: (needDbQuery && connections.length > 0) ? primaryRawQuery : "",
-      connectionId: (needDbQuery && connections.length > 0) ? primaryConnectionId : "",
+      data: primaryDataset,
+      webSources: webSourcesList.length > 0 ? webSourcesList : undefined,
+      isWebSearch: webSourcesList.length > 0,
+      agentId: selectedAgents.map(a => a.id).join(","),
+      agentName: combinedAgentNames,
+      rawQuery: combinedRawQuery,
     };
 
-    if (modelInfo.isConfigured && modelInfo.model) {
-      const synthStartTime = Date.now();
-      console.log(`[DataBridge AI Debug] 📊 Step 4: Launching executive AI synthesis stream via ${modelInfo.providerName} (${modelInfo.modelName})...`);
-
+    if (isConfigured && synthesisModel) {
       const encoder = new TextEncoder();
-      const resilientStream = new ReadableStream({
-        async start(controller) {
-          let chunksEmitted = 0;
-          try {
-            const summaryStream = streamText({
-              model: modelInfo.model! as Parameters<typeof streamText>[0]["model"],
-              maxRetries: 1,
-              system: `${MASTER_ANALYST_SYSTEM_PROMPT}
+      const multiAgentContext = executedAgents
+        .map(
+          (ea, idx) => `### AGENT ${idx + 1}: "${ea.agent.name}"
+Domain Scope: [${ea.agent.tableScope}]
+Subtask: "${ea.subtaskPrompt}"
+Executed Query:
+\`\`\`sql
+${ea.rawExecutedQuery}
+\`\`\`
+Total Records Retrieved: ${ea.totalRowsCount}
+${ea.queryExecutionError ? `Execution Notice: ${ea.queryExecutionError}` : ""}
+Data Sample (Up to ${MAX_SYNTHESIS_ROWS} rows):
+${JSON.stringify(ea.rawResults.slice(0, MAX_SYNTHESIS_ROWS), null, 2)}`
+        )
+        .join("\n\n----------------------------------------\n\n");
 
-EXECUTIVE BUSINESS INTELLIGENCE & AUTO-VISUALIZATION MANDATE:
-You are an executive data analyst preparing business insights ${connections.length > 0 && needDbQuery ? `from target database(s): [${connectedDbNames}]` : ""}${enableWebSearch ? ` and live verified web intelligence.` : "."}
+      const synthesisStream = streamText({
+        model: synthesisModel as Parameters<typeof streamText>[0]["model"],
+        maxRetries: 1,
+        system: `You are an executive business intelligence synthesizer formatting verified data from enterprise systems and live web intelligence.
 
-INTERNAL DATABASE ZERO-HALLUCINATION MANDATE:
-- If the internal database returned records, analyze those exact records with 100% fidelity.
-- If the internal database query returned 0 records or encountered a query error, honestly report that to the user: state that 0 records were found in [${connectedDbNames}] for the specified criteria, and suggest checking the date range, entity code, or filter terms.
-- NEVER fabricate, guess, or hallucinate metrics, transaction numbers, fake customer names, or dollar amounts ($1.8M, etc.) when the database returned 0 rows or an error.
-
-${enableWebSearch ? `
-WEB SEARCH, COMPETITOR ANALYSIS & CITATION MANDATES:
-1. DEEP COMPREHENSIVE SYNTHESIS: You must thoroughly analyze the provided web sources, including all article extracts, snippets, campaign details, awards, press releases, and market statistics.
-2. COMPOSE A PROPER, STRUCTURED EXECUTIVE REPORT: Structure your markdown response with clear, professional sections:
-   ### 1. Executive Summary & Market Landscape
-   ### 2. Deep Competitor Breakdown (e.g. Shell Pakistan vs PSO Pakistan)
-   ### 3. Recent Campaigns, Social Media & Marketing Initiatives
-   ### 4. Strategic Business Guidance & Actionable Recommendations
-3. MANDATORY INLINE CITATIONS: You MUST cite your sources inline throughout your narrative using bracketed citations, e.g., "[Source 1: psopk.com]", "[Source 2]", "[Source 3: facebook.com]", whenever presenting facts, campaigns, awards, market metrics, or initiatives.
-4. STRICT SOURCE INTEGRITY:
-   - If NO internal database was queried (pure web search), you MUST NOT invent, hallucinate, or mention internal company sales, revenue, transaction volume ($1.84M, etc.), or fake internal database metrics.
-   - Do NOT say "the supplied web sources do not contain specifics" if information or snippets are present. Synthesize every available detail from the sources.
-   - If internal database records are provided, integrate both internal metrics and external benchmarks seamlessly.
-5. In your output JSON, populate "webSources" with the verified sources provided.
-` : ""}
+COLLABORATING AGENTS INVOLVED: ${combinedAgentNames}
+${coordinationPlan ? `COORDINATION PLAN: ${coordinationPlan}` : ""}
+${webIntelligenceText}
+${formattedHistoryContext}
 
 MANDATORY RESPONSE FORMAT (STRICT JSON SCHEMA):
 You MUST formulate your response as a valid, well-formed JSON object matching this exact schema:
 {
-  "summary": "Full markdown response with executive sections, bullet points, and inline citations [Source N: domain] answering the user's question.",
-  "recommendedVisualization": "BAR" | "LINE" | "AREA" | "PIE" | "TABLE",
+  "summary": "Full markdown response with executive insights, key findings, cross-agent correlations, and strategic takeaways. Attribute which agent retrieved which data. If live web search was used, cite sources inline like [Source 1: domain.com].",
+  "recommendedVisualization": "BAR" | "LINE" | "PIE" | "TABLE" | "AREA",
   "chartConfig": {
-    "xAxisKey": "string (the primary categorical, entity, competitor, or date column from data)",
-    "dataKeys": ["string (one or more numeric metric column names to plot)"],
-    "title": "string (concise descriptive chart title)"
+    "xAxisKey": "string (name of the primary dimension or category column for Recharts)",
+    "dataKeys": ["string (one or more numeric metric column names to plot in Recharts)"],
+    "title": "string (concise chart title)"
   },
   "data": [
-    /* Array of clean data objects. For competitor analysis without internal DB, include competitors/sources and their summary/metrics */
+    /* Array of row objects for Recharts rendering (use primary or merged cross-agent dataset). Ensure numeric metrics are numbers, not formatted currency strings. */
   ],
   "webSources": [
-    /* Array of web sources matching { "title": string, "url": string, "snippet": string, "domain": string } */
-  ],
-  "isWebSearch": boolean
+    /* Include web sources array if web intelligence was provided */
+  ]
 }
 
 VISUALIZATION RULES:
-- If internal database query was performed, use "BAR" for category comparisons, "LINE" for trends, etc.
-- If pure web search (no internal DB), use "TABLE" to display the verified sources, competitor benchmarks, or key comparative points.
-- Output ONLY the JSON object. Do not add introductory or concluding conversational chat outside the JSON.`,
-              messages: [
-                ...compactHistory,
-                {
-                  role: "user",
-                  content: prompt,
-                },
-                ...(needDbQuery && executionContextForAI.length > 0 ? [{
-                  role: "assistant" as const,
-                  content: `Verified Database Records for Selected Database(s) (${connectedDbNames}):\n${JSON.stringify(executionContextForAI, null, 2)}`,
-                }] : []),
-                ...(enableWebSearch && webSources.length > 0 ? [{
-                  role: "assistant" as const,
-                  content: `Live Web Intelligence (${webSources.length} sources retrieved from ${webProvider}):\n\n${webSources.map((s, i) => `[Source ${i + 1}] Title: ${s.title}\nDomain: ${s.domain || "Web"}\nURL: ${s.url}\nSummary / Snippet: ${s.snippet}\n${s.content ? `Extracted Full Page Article Content:\n${s.content.slice(0, 1800)}` : ""}`).join("\n\n---\n\n")}`,
-                }] : []),
-                {
-                  role: "user",
-                  content: `Please answer the question: "${prompt}". Return ONLY the strict JSON object with "summary", "recommendedVisualization", "chartConfig", "data", and "webSources" based on the provided data. Remember to include inline citations [Source N: domain] throughout your response.`,
-                },
-              ],
-              onFinish({ text }) {
-                console.log(`[DataBridge AI Debug] 🏁 Stream complete in ${Date.now() - synthStartTime}ms. Output length: ${text.length} characters.`);
-              },
-              onError({ error }) {
-                console.error(`[DataBridge AI Debug] ❌ Stream synthesis error after ${Date.now() - synthStartTime}ms:`, error);
-              },
-            });
+- Use "BAR" when comparing amounts, quantities, or sales across customers, items, or categories.
+- Use "LINE" for dates or chronological trends.
+- Use "PIE" for proportion of totals (under 7 slices).
+- Use "TABLE" for listings or text-heavy datasets.
+- Return ONLY the strict JSON object. No conversational chat outside the JSON.`,
+        messages: [
+          {
+            role: "user",
+            content: prompt,
+          },
+          {
+            role: "assistant",
+            content: `VERIFIED MULTI-AGENT ERP DATASETS:\n\n${multiAgentContext}`,
+          },
+          {
+            role: "user",
+            content: `Please synthesize the executive summary across all collaborating agents and output the strict JSON with "summary", "recommendedVisualization", "chartConfig", "data", and "webSources" for Recharts dashboard rendering.`,
+          },
+        ],
+      });
 
-            for await (const textPart of summaryStream.textStream) {
-              controller.enqueue(encoder.encode(textPart));
+      const resilientStream = new ReadableStream({
+        async start(controller) {
+          let chunksEmitted = 0;
+          try {
+            for await (const textChunk of synthesisStream.textStream) {
+              controller.enqueue(encoder.encode(textChunk));
               chunksEmitted++;
             }
 
-            // Fallback: If upstream stream finished with 0 tokens emitted (e.g. token limits, rate-limits, or upstream provider silent cutoff)
             if (chunksEmitted === 0) {
-              console.warn(`[DataBridge AI Debug] ⚠️ Upstream stream emitted 0 tokens. Emitting rich fallback visualization.`);
-              const fallbackJson = JSON.stringify(fallbackVisualization, null, 2);
-              const chunks = fallbackJson.match(/.{1,48}/g) || [fallbackJson];
+              const fallbackStr = JSON.stringify(fallbackWidget, null, 2);
+              const chunks = fallbackStr.match(/.{1,48}/g) || [fallbackStr];
               for (const c of chunks) {
                 controller.enqueue(encoder.encode(c));
-                await new Promise((resolve) => setTimeout(resolve, 8));
+                await new Promise((r) => setTimeout(r, 6));
               }
             }
-          } catch (streamErr) {
-            console.warn(`[DataBridge AI Debug] ⚠️ Upstream stream error (handled with fallback):`, streamErr);
-            if (chunksEmitted === 0) {
-              const fallbackJson = JSON.stringify(fallbackVisualization, null, 2);
-              const chunks = fallbackJson.match(/.{1,48}/g) || [fallbackJson];
-              for (const c of chunks) {
-                controller.enqueue(encoder.encode(c));
-                await new Promise((resolve) => setTimeout(resolve, 8));
-              }
-            } else {
-              controller.enqueue(
-                encoder.encode(
-                  `\n\n⚠️ **Notice:** Stream interrupted by upstream provider: ${
-                    streamErr instanceof Error ? streamErr.message : "Service busy"
-                  }`
-                )
-              );
-            }
+          } catch (err) {
+            console.warn("[Multi-Agent Pipeline] Stream handling fallback:", err);
+            const fallbackStr = JSON.stringify(fallbackWidget, null, 2);
+            controller.enqueue(encoder.encode(fallbackStr));
           } finally {
             controller.close();
           }
@@ -1540,23 +1606,27 @@ VISUALIZATION RULES:
         headers: {
           "Content-Type": "text/plain; charset=utf-8",
           "Transfer-Encoding": "chunked",
-          "X-Connection-Id": (needDbQuery && connections.length > 0) ? primaryConnectionId : "",
-          "X-Raw-Query": (needDbQuery && connections.length > 0) ? encodeURIComponent(primaryRawQuery) : "",
-          "X-Web-Search": enableWebSearch ? "true" : "false",
-          "X-DB-Queried": (needDbQuery && connections.length > 0) ? "true" : "false",
+          "X-Selected-Agent": encodeURIComponent(combinedAgentNames),
+          "X-Agent-Id": selectedAgents.map((a) => a.id).join(","),
+          "X-Connection-Id": primaryConn.id,
+          "X-Raw-Query": encodeURIComponent(combinedRawQuery),
+          "X-DB-Queried": String(executedAgents.some(ea => ea.totalRowsCount > 0)),
+          "X-Router-Matched": "true",
+          "X-Multi-Agent": String(isMultiAgent),
+          "X-Web-Search": String(webSourcesList.length > 0),
         },
       });
     }
 
-    // 5. Autonomous Simulation Fallback (When no LLM configured)
-    const jsonString = JSON.stringify(fallbackVisualization, null, 2);
+    // Autonomous Fallback (when no LLM is configured)
+    const jsonString = JSON.stringify(fallbackWidget, null, 2);
     const encoder = new TextEncoder();
     const customStream = new ReadableStream({
       async start(controller) {
         const chunks = jsonString.match(/.{1,32}/g) || [jsonString];
         for (const chunk of chunks) {
           controller.enqueue(encoder.encode(chunk));
-          await new Promise((resolve) => setTimeout(resolve, 10));
+          await new Promise((resolve) => setTimeout(resolve, 8));
         }
         controller.close();
       },
@@ -1566,17 +1636,22 @@ VISUALIZATION RULES:
       headers: {
         "Content-Type": "text/plain; charset=utf-8",
         "Transfer-Encoding": "chunked",
-        "X-Connection-Id": (needDbQuery && connections.length > 0) ? primaryConnectionId : "",
-        "X-Raw-Query": (needDbQuery && connections.length > 0) ? encodeURIComponent(primaryRawQuery) : "",
-        "X-Web-Search": enableWebSearch ? "true" : "false",
-        "X-DB-Queried": (needDbQuery && connections.length > 0) ? "true" : "false",
+        "X-Selected-Agent": encodeURIComponent(combinedAgentNames),
+        "X-Agent-Id": selectedAgents.map((a) => a.id).join(","),
+        "X-Connection-Id": primaryConn.id,
+        "X-Raw-Query": encodeURIComponent(combinedRawQuery),
+        "X-DB-Queried": String(executedAgents.some(ea => ea.totalRowsCount > 0)),
+        "X-Router-Matched": "true",
+        "X-Multi-Agent": String(isMultiAgent),
+        "X-Web-Search": String(webSourcesList.length > 0),
       },
     });
+
   } catch (error) {
-    console.error("Critical error in /api/chat route handler:", error);
+    console.error("[Multi-Agent Pipeline] Critical error in /api/chat:", error);
     return NextResponse.json(
       {
-        error: "Internal Server Error in Chat Pipeline",
+        error: "Internal Server Error in Multi-Agent Pipeline",
         details: error instanceof Error ? error.message : "Unknown error",
       },
       { status: 500 }

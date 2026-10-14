@@ -66,10 +66,51 @@ export function QuerySessionProvider({
   userId?: string;
   orgId?: string;
 }) {
-  const [sessions, setSessions] = useState<QuerySession[]>([]);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const storageSessionsKey = `databridge_sessions_${userId || "default"}`;
+  const storageActiveKey = `databridge_active_session_${userId || "default"}`;
+
+  const [sessions, setSessions] = useState<QuerySession[]>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const cached = localStorage.getItem(storageSessionsKey);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch {}
+    }
+    return [];
+  });
+
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        return localStorage.getItem(storageActiveKey);
+      } catch {}
+    }
+    return null;
+  });
+
   const [isLoaded, setIsLoaded] = useState(false);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Sync sessions to localStorage
+  useEffect(() => {
+    if (typeof window !== "undefined" && sessions.length > 0) {
+      try {
+        localStorage.setItem(storageSessionsKey, JSON.stringify(sessions));
+      } catch {}
+    }
+  }, [sessions, storageSessionsKey]);
+
+  // Sync activeSessionId to localStorage
+  useEffect(() => {
+    if (typeof window !== "undefined" && activeSessionId) {
+      try {
+        localStorage.setItem(storageActiveKey, activeSessionId);
+      } catch {}
+    }
+  }, [activeSessionId, storageActiveKey]);
 
   // Helper to generate a fallback local session structure
   const createFallbackSession = useCallback((initialConnIds: string[] = []): QuerySession => {
@@ -86,7 +127,7 @@ export function QuerySessionProvider({
 
   // 1. Initial Load: Fetch persistent sessions from SQL Server DB
   useEffect(() => {
-    if (!userId || !orgId) return;
+    if (!userId) return;
 
     let isMounted = true;
     async function loadSessions() {
@@ -96,7 +137,16 @@ export function QuerySessionProvider({
           const data = await res.json();
           if (isMounted && Array.isArray(data.sessions) && data.sessions.length > 0) {
             setSessions(data.sessions);
-            setActiveSessionId(data.sessions[0].id);
+            // Preserve current active session if it exists in returned sessions
+            setActiveSessionId((currentActiveId) => {
+              if (
+                currentActiveId &&
+                data.sessions.some((s: QuerySession) => s.id === currentActiveId)
+              ) {
+                return currentActiveId;
+              }
+              return data.sessions[0].id;
+            });
             setIsLoaded(true);
             return;
           }
@@ -105,33 +155,42 @@ export function QuerySessionProvider({
         console.warn("Failed to load query sessions from database:", e);
       }
 
-      // If no sessions exist in DB, create initial one via POST
-      try {
-        const createRes = await fetch("/api/chat/sessions", {
+      // DO NOT automatically create a new session on tab switch if sessions already exist in state/localStorage!
+      setSessions((currentSessions) => {
+        if (currentSessions.length > 0) {
+          if (isMounted) setIsLoaded(true);
+          return currentSessions;
+        }
+
+        // Only create an initial session if there are strictly zero sessions anywhere
+        fetch("/api/chat/sessions", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ title: "New Business Inquiry", selectedConnIds: [] }),
-        });
-        if (createRes.ok) {
-          const data = await createRes.json();
-          if (isMounted && data.session) {
-            setSessions([data.session]);
-            setActiveSessionId(data.session.id);
-            setIsLoaded(true);
-            return;
-          }
-        }
-      } catch (e) {
-        console.warn("Failed to create initial database session:", e);
-      }
+        })
+          .then(async (createRes) => {
+            if (createRes.ok) {
+              const data = await createRes.json();
+              if (isMounted && data.session) {
+                setSessions([data.session]);
+                setActiveSessionId(data.session.id);
+                setIsLoaded(true);
+                return;
+              }
+            }
+            throw new Error("Could not create initial session in DB");
+          })
+          .catch(() => {
+            if (isMounted) {
+              const initialSession = createFallbackSession([]);
+              setSessions([initialSession]);
+              setActiveSessionId(initialSession.id);
+              setIsLoaded(true);
+            }
+          });
 
-      // Fallback
-      if (isMounted) {
-        const initialSession = createFallbackSession([]);
-        setSessions([initialSession]);
-        setActiveSessionId(initialSession.id);
-        setIsLoaded(true);
-      }
+        return currentSessions;
+      });
     }
 
     loadSessions();
